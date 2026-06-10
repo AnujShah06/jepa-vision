@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pt
+*.ckpt
+*.onnx
+wandb/
+data/
+.DS_Store
+*.egg-info/
+dist/
+.pytest_cache/
