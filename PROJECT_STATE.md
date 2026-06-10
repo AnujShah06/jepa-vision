@@ -11,49 +11,57 @@
 
 ## Current phase / step
 
-**Phase 0 — Foundation**
-**Gate 0 PASSED** — end-to-end smoke test passing on MPS
+**Phase 1 — I-JEPA-mini on STL-10**
+**Step 1.2 complete** — I-JEPA block masking + visual unit test
 
 ---
 
 ## Last completed run
 
-**Gate 0 smoke test**
-- W&B run: https://wandb.ai/entropy_chess/jepa-vision/runs/95gqj0np
-- Config: d_model=64, enc_layers=2, enc_heads=4, pred_layers=2, pred_heads=4, sigreg_weight=0.1
+**Gate 0 re-run with block masking collator**
+- W&B run: https://wandb.ai/entropy_chess/jepa-vision/runs/emfmwch0
+- Config: same tiny d_model=64, 2 layers, 4 heads; new I-JEPA block collator
 - Data: 100 STL-10 unlabeled images, 7 batches/epoch, batch_size=16
 - Device: MPS (Apple Silicon)
-- Trainable params: 212,608
 
 Results (2 epochs):
 
-| epoch | loss   | pred_loss | sigreg | effective_rank | spread  |
-|-------|--------|-----------|--------|----------------|---------|
-| 0     | 0.4269 | 0.3571    | 0.6980 | 38.20          | 9.7952  |
-| 1     | 0.3347 | 0.2916    | 0.4313 | 36.80          | 10.5630 |
+| epoch | loss   | pred_loss | sigreg | effective_rank | spread   |
+|-------|--------|-----------|--------|----------------|----------|
+| 0     | 0.4159 | 0.3600    | 0.5591 | 39.81          | 9.8466   |
+| 1     | 0.4013 | 0.3450    | 0.5630 | 37.00          | 10.5424  |
 
-Loss decreased, effective_rank healthy (38 >> 1), spread positive — plumbing is green.
+Loss decreasing, effective_rank healthy, plumbing confirmed with real block masks.
+
+Previous Gate 0 run (random-partition collator):
+- W&B run: https://wandb.ai/entropy_chess/jepa-vision/runs/95gqj0np
 
 ---
 
 ## Open decisions
 
-- Compute platform not yet chosen (Step 0.2). STL-10 unlabeled (~2.6 GB) now cached in data/.
-- Three seeds chosen over five for vision multi-seed protocol (see DECISIONS.md).
-- Random patch masking used for smoke test; proper block masking (4 target blocks, 85-100% context) is Step 1.1.
+- Compute platform not yet chosen (Step 0.2). STL-10 unlabeled cached in data/.
+- Three seeds chosen over five (see DECISIONS.md).
+- Block masking currently uses ONE mask per batch (all images share same target/context
+  split). Per-image masking (each image independently sampled) is deferred to Step 1.3
+  and requires variable-length handling or padding in the model forward pass.
+- Context block area lower bound ~75% (instead of nominal 85%) due to integer
+  rounding + grid clamping at extreme aspect ratios. Documented in test_masking.py.
 
 ---
 
 ## Next action
 
-**Phase 1, Step 1.1** — proper data pipeline:
-- Block-masking collator (4 target blocks, 15-20% each, aspect 0.75-1.5; context 85-100% minus target patches)
-- Visual unit test: render 10 sampled masks to PNG and eyeball
-- Download OOD sets (SVHN test, CIFAR-10 test) now while building data code
-- Upgrade `src/data/stl10.py`: full 100k unlabeled pretraining loader + probe train/val/test split
+**Phase 1, Step 1.1 / 1.3 — full data pipeline + production training run:**
+- Upgrade `src/data/stl10.py`: full 100k unlabeled pretraining loader with
+  RandomResizedCrop(96, scale=0.3–1.0) + horizontal flip augmentation
+- Probe train/val/test split (carve 1k val from 5k labeled train, quarantine test)
+- Timing run (Step 0.2): measure 1 epoch wall time to set the training schedule
+- Then: production VisionJEPA config (d=192, 6 layers, 3 heads), 150-epoch reference run
+  with W&B collapse dashboard (effective_rank must stay above ~50% of d throughout)
 
 ---
 
 ## Waived gates + justification
 
-None. Gate 0 passed on hardware (MPS), W&B link above.
+None. Gate 0 passed (original run + re-run with block masking).

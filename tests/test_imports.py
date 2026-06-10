@@ -31,3 +31,11 @@ def test_import_eval_bootstrap():
 
 def test_import_eval_energy():
     import src.eval.energy
+
+
+def test_import_data_masking():
+    import src.data.masking
+
+
+def test_import_data_stl10():
+    import src.data.stl10

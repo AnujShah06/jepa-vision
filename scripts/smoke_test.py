@@ -78,8 +78,9 @@ def main() -> None:
         data_dir,
         n_images=100,
         batch_size=16,
-        n_target_patches=20,
-        n_total_patches=n_patches,
+        n_h=cfg.img_size // cfg.patch_size,
+        n_w=cfg.img_size // cfg.patch_size,
+        seed=0,
     )
     print(f"[smoke_test] {len(loader)} batches per epoch")
 
