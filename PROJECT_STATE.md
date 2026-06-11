@@ -12,7 +12,7 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.3 complete** — overfit check + checkpoint-resume verified; train entry point created
+**Step 1.5a complete** — baseline suite built, tested, sanity-checked on val gaussian-3
 
 ---
 
@@ -81,11 +81,74 @@ Trainable params: 3,079,392. Total (incl. frozen target): 5,748,960 ≈ 6M.
 
 ---
 
+## Step 1.4 — Energy function results
+
+**Validation split** — `data/splits/stl10_val_idx.json` (committed):
+- Stratified 100/class × 10 classes = 1,000 images; seed=0; carved from STL-10 labeled train
+- Probe training must use the complement: 4,000 images (range(5000) minus val indices)
+- `get_val_loader()` and `get_probe_train_loader()` in src/data/stl10.py enforce this split
+
+**K-sweep** (formal 1,000-image val split, gaussian_noise severity=3, ckpt=tkqjawa0/best.ckpt):
+
+| K  | AUROC  | clean μ | corrupt μ | clean σ |
+|----|--------|---------|-----------|---------|
+| 1  | 0.781  | 0.2009  | 0.2243    | 0.0367  |
+| 4  | 0.747  | 0.2135  | 0.2322    | 0.0298  |
+| 8  | 0.763  | 0.2179  | 0.2368    | 0.0276  |
+| 16 | 0.792  | 0.2183  | 0.2379    | 0.0258  |
+
+- AUROC K-insensitive within single-seed noise (0.747–0.792, ±0.02 around 0.77) ✓
+- clean σ decreases monotonically (variance reduction as designed) ✓
+- K=8 locked as inference default (see DECISIONS.md)
+- Figure: reports/figures/k_sweep.png
+
+Note: the original K-sweep (first session of Step 1.4) used the first 500 images from STL-10 train
+(indices 0-499), which is NOT the formal val split (only 112/500 overlap). Results superseded.
+
+**Files added (Step 1.4):**
+- `src/eval/energy.py` — `image_energy`, `energy_over_loader`, `energy_heatmap`
+- `src/data/stl10.py` — added `get_eval_loader` (plain images, no masking)
+- `scripts/k_sweep.py` — K-sweep script
+- `tests/test_energy.py` — 10 new tests (41/41 total passing)
+
+---
+
+## Step 1.5a — Baseline sanity results
+
+**Sanity check:** `baseline_sanity.py --jepa_ckpt runs/tkqjawa0/best.ckpt --severity 3`
+(validation only; no W&B link — sanity script, not a training run)
+
+| Baseline | AUROC | clean μ | corrupt μ | clean σ |
+|---|---|---|---|---|
+| Pixel std (trivial floor) | 0.7221 | 1.0139 | 1.1926 | 0.2597 |
+| Random-init JEPA (K=8) | 0.7891 | 0.5114 | 0.5305 | 0.0080 |
+| Mahalanobis (trained features) | 0.6040 | 13.89 | 14.29 | 2.20 |
+| MAE reconstruction (K=8, untrained) | 0.3929 | 1.3369 | 1.3326 | 0.0135 |
+| **JEPA energy K=8 (trained, seed-0)** | **0.7642** | **0.2179** | **0.2370** | **0.0276** |
+
+**Observations:**
+- Random-init AUROC=0.789 is high because gaussian noise changes embedding norms even through random weights; trained JEPA (0.764) is slightly below on this single seed — Gate 1B needs ≥3 seeds before drawing any conclusion.
+- Mahalanobis (0.604) confirms feature space responds to distribution shift but is weaker than the prediction-error energy.
+- MAE untrained inverts (0.393 < 0.5): gaussian noise inflates per-patch variance; `norm_pix_loss` normalizes by that variance, making the untrained decoder's near-zero predictions look better on noisy patches. Expected — untrained MAE must be trained before it is a meaningful baseline.
+- Pixel std (0.722) is the honest floor for pixel-level gaussian noise.
+
+**Bug fixed during sanity run:** `auroc()` in `evaluate.py` used `torch.arange` without `device=` arg — fails when inputs are on MPS. Fixed with `device=all_scores.device`.
+
+**Files added (Step 1.5a):**
+- `src/models/mae.py` — PixelMAE (same encoder budget as VisionJEPA; lightweight decoder)
+- `src/eval/baselines.py` — four baseline energy functions
+- `configs/mae_baseline.yaml` — MAE training config
+- `scripts/train_mae.py` — MAE training entry point
+- `scripts/baseline_sanity.py` — runs all 5 baselines, prints table
+- `tests/test_baselines.py` — 25 tests (65/65 total passing)
+
+---
+
 ## Next action
 
-**Phase 1, Step 1.3 — production reference run (3 seeds):**
+**Phase 1, Step 1.5b — production reference run (3 seeds) + Gate 1A/1B:**
 
-Pre-flight complete. Run three seeds back-to-back:
+Run three seeds back-to-back:
 
 ```
 uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 0
@@ -95,9 +158,10 @@ uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2
 
 After each run:
 1. Record W&B link here
-2. Gate 1A check: effective_rank > 96 (>50% of d=192) throughout the run.
-   If it crashes below: raise EMA start, check stop-gradient, raise sigreg_weight
-3. After all 3 seeds: update DECISIONS.md with final frozen hyperparameters
+2. Gate 1A check: effective_rank > 96 (>50% of d=192) throughout the run
+3. After 3 seeds: run full corruption + OOD benchmark (Gate 1B)
+4. Re-run baseline_sanity.py with each trained JEPA seed; JEPA must be clearly above random-init CI to pass Gate 1B
+5. Update DECISIONS.md with final frozen hyperparameters
 
 ---
 

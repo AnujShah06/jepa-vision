@@ -21,3 +21,24 @@ Format: `[Step] Decision — one-line rationale`
 [1.3] **Overfit gate passed (moving-target behavior confirmed, no bugs)** — diagnostic run with frozen target (use_ema=false) and sigreg_weight=0 on 500 images, 200 epochs: pred_loss 0.461→0.125 (W&B: ia2z1vva). Did not reach ~0 because IJEPAMaskCollator draws a fresh random mask every batch; the predictor must generalise across all mask positions rather than memorise (image, position) pairs, giving an irreducible floor ~0.12. Decomposition: 0.236 (moving-target run) ≈ 0.125 (mask-variability floor) + 0.11 (moving-target overhead). The 0.24 floor in the production overfit run is explained entirely by moving-target dynamics; the predictor path, masking indexing, and loss function are all correct.
 
 [1.3] **Checkpoint-resume: save epoch index in blob; resume by restoring optimizer+scheduler state_dict** — scheduler created with full-run total_steps on every launch; restoring state_dict advances last_epoch so LR continues smoothly. W&B run stitched via wandb_run_id stored in checkpoint extra dict.
+
+[1.4] **Energy = mean smooth-L1 latent prediction error over target patches, averaged over K independent mask samples** — eval-side sampling via sample_block_mask with seeded random.Random; training collator untouched.
+
+[1.4] **K=8 as inference default** — K-sweep on the formal 1,000-image val split (gaussian_noise sev=3, ckpt tkqjawa0/best.ckpt, stratified 100/class seed=0):
+
+| K  | AUROC  | clean σ |
+|----|--------|---------|
+| 1  | 0.781  | 0.0367  |
+| 4  | 0.747  | 0.0298  |
+| 8  | 0.763  | 0.0276  |
+| 16 | 0.792  | 0.0258  |
+
+AUROC is K-insensitive within single-seed noise (range 0.747–0.792, spread ≈ ±0.02 around 0.77). K=8 chosen on variance/cost: σ drops 25% vs K=1 while costing 8× the forward passes; K=16 adds only 6% further variance reduction at 2× the cost of K=8. Phase 3 C++ export will batch K masks as one forward pass to amortise the overhead.
+
+[1.4] **Per-patch energy: accumulate smooth-L1 errors per patch across K masks, divide by visit count** — unvisited positions left at 0.0 and excluded from scalar mean. Heatmap: bilinear upsample [n_h×n_w] → [H×W], 'hot' colormap, ImageNet-denormalized source image alpha-blended at α=0.5.
+
+[1.5a] **Baseline suite: pixel-std, random-init, Mahalanobis, PixelMAE (untrained), JEPA (trained)** — sanity check on val gaussian-3 (n=1000, K=8, seed-0 ckpt tkqjawa0/best.ckpt). Results: pixel-std 0.722, random-init 0.789, Mahalanobis 0.604, MAE-untrained 0.393, JEPA-trained 0.764. Random-init AUROC high because gaussian noise shifts embedding norms through any architecture; Gate 1B comparison requires ≥3 seeds + CIs before JEPA-vs-random-init conclusion can be drawn. Untrained MAE inverts (AUROC<0.5) due to norm_pix_loss: gaussian noise inflates per-patch variance, normalization shrinks the reconstruction target toward zero, and the untrained decoder's near-zero outputs look better on noisy patches — training the MAE removes this artifact.
+
+[1.5a] **PixelMAE architecture: same ViT-Tiny encoder as VisionJEPA (d=192, 6 layers, 3 heads); lightweight decoder (enc_to_dec projection + 2-layer transformer at d=128 + pixel_proj); 75% random masking; norm_pix_loss=True** — identical encoder budget ensures MAE-vs-JEPA comparison isolates objective (pixel reconstruction vs latent prediction) rather than capacity.
+
+[1.5a] **auroc() device fix: added device=all_scores.device to torch.arange call** — failure manifested on MPS when energy tensors returned on device; torch.arange defaults to CPU. Fix applied to src/eval/evaluate.py (ported code, not rewritten).

@@ -1,0 +1,48 @@
+# mae_baseline.yaml -- Step 1.5 pixel-space MAE baseline
+#
+# Encoder: identical to VisionJEPA (ViT-Tiny: d=192, 6 layers, 3 heads).
+# Decoder: lightweight — 2 transformer layers at dec_width=128.
+# Training: random 75% masking, MSE on per-patch-normalised pixel values.
+# Data:     same STL-10 unlabeled pretraining set as JEPA.
+#
+# Comparison intent: "trained MAE" vs "trained JEPA" isolates whether
+# predicting in LATENT space (JEPA) outperforms pixel-space reconstruction
+# (MAE) as an anomaly energy.
+#
+# Usage:
+#   uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0
+
+model:
+  img_size: 96
+  patch_size: 8
+  d_model: 192         # encoder: same as VisionJEPA
+  enc_layers: 6
+  enc_heads: 3
+  dec_width: 128       # decoder: lightweight (2/3 encoder width)
+  dec_layers: 2
+  dec_heads: 2         # 128 / 2 = 64 per head
+  mask_ratio: 0.75     # standard MAE
+  dropout: 0.0
+  norm_pix_loss: true  # per-patch pixel normalisation (He et al. 2022)
+
+data:
+  n_images: null        # full 100k unlabeled STL-10
+  augment: true         # RandomResizedCrop(96, 0.3-1.0) + RandomHorizontalFlip
+  batch_size: 256
+  num_workers: 4
+  seed: null            # overridden by --seed CLI arg
+
+train:
+  epochs: 150
+  lr: 1.5e-4            # MAE default is lower LR than JEPA
+  weight_decay: 0.05
+  warmup_epochs: 10
+  grad_clip: 1.0
+  ckpt_every: 10
+  diag_every: 10        # no collapse diagnostics for MAE (no EMA encoder)
+  use_amp: true
+
+wandb:
+  project: jepa-vision
+  entity: entropy_chess
+  tags: ["mae-baseline", "step-1.5"]

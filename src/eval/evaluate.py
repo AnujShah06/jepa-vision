@@ -49,7 +49,8 @@ def auroc(neg_scores: torch.Tensor, pos_scores: torch.Tensor) -> float:
     order = torch.argsort(all_scores)
     ranks = torch.empty_like(all_scores)
     ranks[order] = torch.arange(1, all_scores.numel() + 1,
-                                dtype=all_scores.dtype)
+                                dtype=all_scores.dtype,
+                                device=all_scores.device)
     # average-rank tie correction
     sorted_scores = all_scores[order]
     i = 0
