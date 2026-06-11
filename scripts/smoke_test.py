@@ -49,6 +49,7 @@ def main() -> None:
         enc_layers=2,
         enc_heads=4,       # 64/4 = 16 per head
         pred_layers=2,
+        pred_width=64,     # same as d_model → Identity projections, no extra params
         pred_heads=4,
         sigreg_weight=0.1,
         sigreg_projections=16,

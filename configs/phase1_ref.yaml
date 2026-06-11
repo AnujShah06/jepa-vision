@@ -1,0 +1,42 @@
+# phase1_ref.yaml -- Phase 1 production reference run
+# Full 100k STL-10 unlabeled, prod config, 150 epochs.
+# Run 3 seeds: uv run python scripts/train.py --config configs/phase1_ref.yaml --seed N
+
+data:
+  n_images: null         # null = full 100k unlabeled split
+  augment: true          # RandomResizedCrop(96, 0.3-1.0) + RandomHorizontalFlip
+  batch_size: 256
+  num_workers: 4
+  seed: null             # overridden by --seed CLI arg
+
+model:
+  img_size: 96
+  patch_size: 8
+  d_model: 192
+  enc_layers: 6
+  enc_heads: 3
+  pred_layers: 3
+  pred_width: 96
+  pred_heads: 3
+  sigreg_weight: 1.0
+  sigreg_projections: 64
+  ema_decay: 0.996
+  use_ema: true
+  dropout: 0.0
+
+train:
+  epochs: 150
+  lr: 1.0e-3
+  weight_decay: 0.04
+  warmup_epochs: 10
+  grad_clip: 1.0
+  ckpt_every: 10
+  diag_every: 1
+  ema_start: 0.996
+  ema_end: 1.0
+  use_amp: true
+
+wandb:
+  project: jepa-vision
+  entity: entropy_chess
+  tags: ["phase1-ref"]

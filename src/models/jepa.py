@@ -132,9 +132,10 @@ class VisionJEPAConfig:
     d_model: int = 192
     enc_layers: int = 6
     enc_heads: int = 3            # 192/3 = 64 per head
-    # predictor (lower capacity -- Step 1.2 adds separate pred_width projection)
+    # predictor (lower capacity than encoder)
     pred_layers: int = 3
-    pred_heads: int = 3           # must divide d_model
+    pred_width: int = 96          # predictor hidden dim; Linear projections bridge d_model↔pred_width
+    pred_heads: int = 3           # must divide pred_width
     # regularizer
     sigreg_weight: float = 1.0
     sigreg_projections: int = 64
@@ -181,13 +182,20 @@ class VisionJEPA(nn.Module):
         for p in self.target_encoder.parameters():
             p.requires_grad_(False)
 
-        # learnable mask token; added to target positional embeddings
+        # learnable mask token in encoder space; projected into predictor space below
         self.mask_token = nn.Parameter(torch.zeros(1, 1, c.d_model))
         nn.init.trunc_normal_(self.mask_token, std=0.02)
 
-        # predictor runs at same width as encoder (Step 1.2 adds proj for pred_width)
+        # predictor at pred_width with linear in/out projections
+        # when pred_width == d_model the projections are Identity (no extra params)
+        if c.pred_width != c.d_model:
+            self.pred_proj_in  = nn.Linear(c.d_model, c.pred_width, bias=False)
+            self.pred_proj_out = nn.Linear(c.pred_width, c.d_model, bias=False)
+        else:
+            self.pred_proj_in  = nn.Identity()
+            self.pred_proj_out = nn.Identity()
         self.predictor = ViTEncoder(
-            c.d_model, c.pred_layers, c.pred_heads, c.dropout
+            c.pred_width, c.pred_layers, c.pred_heads, c.dropout
         )
 
     # -- forward -----------------------------------------------------------
@@ -215,9 +223,10 @@ class VisionJEPA(nn.Module):
         # 4. Predictor: context embeddings + mask tokens at target positions
         tgt_pos = self.pos_embed[:, target_idx, :]       # [1, N_tgt, d]
         mask_tokens = self.mask_token.expand(B, target_idx.shape[0], -1) + tgt_pos
-        pred_input = torch.cat([ctx_emb, mask_tokens], dim=1)  # [B, N_ctx+N_tgt, d]
-        pred_out = self.predictor(pred_input)
-        predicted = pred_out[:, N_ctx:, :]               # [B, N_tgt, d]
+        pred_input = torch.cat([ctx_emb, mask_tokens], dim=1)   # [B, N_ctx+N_tgt, d]
+        pred_input = self.pred_proj_in(pred_input)               # [B, N_ctx+N_tgt, pred_w]
+        pred_out   = self.predictor(pred_input)                  # [B, N_ctx+N_tgt, pred_w]
+        predicted  = self.pred_proj_out(pred_out[:, N_ctx:, :])  # [B, N_tgt, d]
 
         # 5. Loss: smooth-L1 prediction loss + SIGReg on context embeddings
         predicted_flat = predicted.reshape(-1, self.cfg.d_model)

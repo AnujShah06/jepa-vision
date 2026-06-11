@@ -1,0 +1,50 @@
+# diag_fixed_target.yaml -- Step 1.3 diagnostic: fixed target, no regularizer
+#
+# use_ema: false  → target encoder frozen at init (deepcopy of context encoder,
+#                   never updated). ema_update() is a no-op.
+# sigreg_weight: 0 → pure MSE between predictor output and frozen target latents.
+#
+# With a fixed target on 500 images, pred_loss is plain regression to a
+# deterministic function f(image) = target_encoder(image). pred_loss should
+# drive toward ~0 if the architecture is correct. A floor at ~0.24 (matching
+# the moving-target run) would indicate a bug in the predictor path or masking
+# indexing. Expected outcome: pred_loss << 0.05 by epoch 200.
+
+data:
+  n_images: 500
+  augment: false
+  batch_size: 64
+  num_workers: 0
+  seed: 0
+
+model:
+  img_size: 96
+  patch_size: 8
+  d_model: 192
+  enc_layers: 6
+  enc_heads: 3
+  pred_layers: 3
+  pred_width: 96
+  pred_heads: 3
+  sigreg_weight: 0.0     # no regularizer -- pure prediction MSE
+  sigreg_projections: 64
+  ema_decay: 0.996
+  use_ema: false         # target frozen at init (deepcopy of context encoder)
+  dropout: 0.0
+
+train:
+  epochs: 200
+  lr: 1.0e-3
+  weight_decay: 0.04
+  warmup_epochs: 5
+  grad_clip: 1.0
+  ckpt_every: 200        # only save at end
+  diag_every: 5
+  ema_start: 0.996
+  ema_end: 1.0
+  use_amp: true
+
+wandb:
+  project: jepa-vision
+  entity: entropy_chess
+  tags: ["diag-fixed-target", "step-1.3"]

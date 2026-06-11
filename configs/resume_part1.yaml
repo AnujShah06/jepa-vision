@@ -1,0 +1,42 @@
+# resume_part1.yaml -- first half of checkpoint-resume test
+# Run 7 epochs (checkpoint saved at epoch 5), then resume from that checkpoint
+# using resume_test.yaml.
+
+data:
+  n_images: 500
+  augment: false
+  batch_size: 64
+  num_workers: 0
+  seed: 42
+
+model:
+  img_size: 96
+  patch_size: 8
+  d_model: 192
+  enc_layers: 6
+  enc_heads: 3
+  pred_layers: 3
+  pred_width: 96
+  pred_heads: 3
+  sigreg_weight: 1.0
+  sigreg_projections: 64
+  ema_decay: 0.996
+  use_ema: true
+  dropout: 0.0
+
+train:
+  epochs: 7
+  lr: 1.0e-3
+  weight_decay: 0.04
+  warmup_epochs: 2
+  grad_clip: 1.0
+  ckpt_every: 5
+  diag_every: 1
+  ema_start: 0.996
+  ema_end: 1.0
+  use_amp: true
+
+wandb:
+  project: jepa-vision
+  entity: entropy_chess
+  tags: ["resume-test", "step-1.3", "part1"]

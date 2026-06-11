@@ -22,6 +22,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: object | None = None,
+    epoch: int = 0,
     step: int = 0,
     extra: dict | None = None,
 ) -> Path:
@@ -30,6 +31,7 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     blob = {
         "model_state": model.state_dict(),
+        "epoch": epoch,
         "step": step,
         "optimizer_state": optimizer.state_dict() if optimizer else None,
         "scheduler_state": scheduler.state_dict() if scheduler else None,
@@ -64,6 +66,7 @@ def load_checkpoint(
 
     return {
         "model": model,
+        "epoch": blob.get("epoch", 0),
         "step": blob.get("step", 0),
         "optimizer_state": blob.get("optimizer_state"),
         "scheduler_state": blob.get("scheduler_state"),
