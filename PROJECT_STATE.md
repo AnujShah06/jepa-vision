@@ -12,7 +12,7 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.5a complete** — baseline suite built, tested, sanity-checked on val gaussian-3
+**Step 1.5d complete** — probe + from-scratch harness built, smoke-tested at n=200
 
 ---
 
@@ -64,6 +64,10 @@ Trainable params: 3,079,392. Total (incl. frozen target): 5,748,960 ≈ 6M.
 - Loss continued 0.47 → 0.40 after resume (no reset) ✓; artifacts ep10 + ep15 uploaded ✓
 - Note: ep 5-6 get W&B step-conflict warnings (expected; part1 ran past the checkpoint epoch)
 - **PASS** — save/load/resume pipeline works end-to-end
+
+**Production reference run — seed 0 (150 epochs, 100k unlabeled STL-10):**
+- W&B run ID: tkqjawa0  (checkpoint: runs/tkqjawa0/best.ckpt)
+- This IS the completed seed-0 production run; probe grid numbers in Step 1.5d are real.
 
 **Gate 0 re-run with block masking:**
 - W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/emfmwch0
@@ -144,24 +148,83 @@ Note: the original K-sweep (first session of Step 1.4) used the first 500 images
 
 ---
 
+## Step 1.5d — Probe grid results (seed-0, tkqjawa0, val only)
+
+**Full-budget run:** `probe_sweep.py --jepa_ckpt runs/tkqjawa0/best.ckpt --probe_epochs 100 --scratch_epochs 200`
+Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
+(No W&B link — evaluation script, not a training run.)
+
+| n | Frozen probe | From-scratch | Gap (P−S) | Best LR |
+|---|---|---|---|---|
+| 40 | 0.2930 | 0.2380 | **+0.055** | 1e-03 |
+| 200 | 0.3940 | 0.3840 | **+0.010** | 1e-04 |
+| 400 | 0.4350 | 0.4120 | **+0.023** | 1e-04 |
+| 4000 | 0.5730 | 0.6360 | −0.063 | 1e-03 |
+
+**Interpretation:**
+- Low-label cells (n=40/200/400): probe beats scratch in all 3 → pretraining helps under label scarcity ✓
+- n=4000 (full probe pool, 400/class): scratch (0.636) > probe (0.573) by −6.3 pp
+- Gate 1B criterion (iii) ("pretrained > scratch in most low-label cells"): **3/4 cells positive** ✓ — still needs ≥3 seeds for reportable numbers
+- Gate 1B criterion (ii) sanity floor ("probe at 100% labels ≥ ~70%"): probe=57.3% — **FAILING** ⚠️ gap is 12.7 pp; numbers are from the completed seed-0 production run (tkqjawa0, 150 epochs); floor not met with plain mean-pool context-encoder + fixed lr probe
+- Probe path diagnostics run (see below): best single-seed config reaches 0.601 — floor still failing by 9.9 pp; this is a representation quality issue, not a probe configuration issue
+
+## Step 1.5d — Probe diagnostics (n=4000, seed-0, val only)
+
+`scripts/probe_diag.py --jepa_ckpt runs/tkqjawa0/best.ckpt`
+
+| Variant | Val Acc | Ep | Best LR |
+|---|---|---|---|
+| context mean (baseline) | 0.5710 | 100 | 1e-03 |
+| target mean | 0.5720 | 100 | 1e-03 |
+| context mean + z-score | 0.5800 | 100 | 1e-03 |
+| target mean + z-score | 0.5810 | 100 | 1e-03 |
+| context mean+max concat | 0.5730 | 100 | 1e-03 |
+| context last-2-layer concat | 0.5920 | 100 | 1e-03 |
+| target mean + lr-sweep + 200ep | 0.5900 | 200 | 3e-03 |
+| **target mean+zscore + lr-sweep + 200ep** | **0.6010** | **200** | **3e-03** |
+
+**Findings:**
+- Target encoder ≈ context encoder (+0.001) — EMA hasn't diverged substantially, suggesting either short training or high EMA decay. Not the JEPA-family norm where target markedly outperforms context.
+- Z-score standardisation: +1.0 pp — modest but consistent
+- Last-2-layer concat: +2.1 pp — penultimate layer features carry complementary information
+- Longer schedule (200ep) + lr=3e-3: +1.9 pp (lr=1e-3 was underpowered at n=4000)
+- Best combo (target+zscore+lr-sweep+200ep): **0.601**, up +3.0 pp from baseline
+- **Gate 1B floor (≥0.70): FAIL — gap is −9.9 pp even with the best probe config**
+- The 9.9 pp residual gap is a representation quality issue, not a probe configuration issue; exhausting probe variants recovers only 3 pp of the 12.7 pp deficit
+- Re-run multi-seed sweep with best config (target+zscore, lr=3e-3, 200ep) once seeds 1 & 2 are trained
+
+**Files added (Step 1.5d):**
+- `src/eval/probe.py` — `stratified_sample`, `get_probe_pool`, `extract_features`, `train_probe`, `ScratchClassifier`, `train_scratch` (AMP-enabled)
+- `scripts/probe_smoke.py` — quick sanity check (n=200, small epoch budget)
+- `scripts/probe_sweep.py` — full-budget grid runner, writes Markdown report
+- `scripts/probe_diag.py` — diagnostic ablation runner
+- `tests/test_probe.py` — 22 tests (87/87 total passing)
+- `reports/probe_seed0_val.md` — full-budget seed-0 grid (context mean, lr=1e-3, 100ep)
+
+---
+
 ## Next action
 
 **Phase 1, Step 1.5b — production reference run (3 seeds) + Gate 1A/1B:**
 
-Run three seeds back-to-back:
+Run three seeds back-to-back (seed 1 in progress):
 
 ```
 uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 0
-uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 1
+uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 1   ← in progress
 uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2
 ```
 
-After each run:
-1. Record W&B link here
-2. Gate 1A check: effective_rank > 96 (>50% of d=192) throughout the run
-3. After 3 seeds: run full corruption + OOD benchmark (Gate 1B)
-4. Re-run baseline_sanity.py with each trained JEPA seed; JEPA must be clearly above random-init CI to pass Gate 1B
-5. Update DECISIONS.md with final frozen hyperparameters
+After each run, record the W&B link here and check Gate 1A (effective_rank > 96 throughout).
+
+After all 3 seeds are trained (150 epochs each):
+1. Re-run `probe_sweep.py` per seed; pool results → 3-seed mean ± std per cell
+2. Re-run `baseline_sanity.py` per seed; confirm JEPA energy > random-init with CI
+3. Gate 1B checks:
+   - (i) corruption AUROC clearly above random-init and pixel baselines (majority of corruption types)
+   - (ii) probe at n=4000 ≥ 70% val acc
+   - (iii) probe > scratch in most low-label cells (already 3/4 on seed-0 preliminary)
+4. Update DECISIONS.md with final frozen hyperparameters
 
 ---
 

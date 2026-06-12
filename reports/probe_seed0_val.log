@@ -1,0 +1,37 @@
+[sweep] device=mps  amp=on  probe_ep=100  scratch_ep=200
+[sweep] ckpt=runs/tkqjawa0/best.ckpt  n_list=[40, 200, 400, 4000]  seed=0
+[sweep] encoder loaded
+[sweep] extracting val features ...  torch.Size([1000, 192])  (0m00s)
+[sweep] loading probe pool labels ...  4000 images
+[sweep] extracting all probe features ...  torch.Size([4000, 192])  (0m05s)
+
+[sweep] ── n=40 (4/class) ──────────────────────
+  [probe] 100 epochs ...  val_acc=0.2930  (0m00s)
+  [scratch] 200 ep × 3 lrs ...  val_acc=0.2380  best_lr=1e-03  (5m10s)
+
+[sweep] ── n=200 (20/class) ──────────────────────
+  [probe] 100 epochs ...  val_acc=0.3940  (0m00s)
+  [scratch] 200 ep × 3 lrs ...  val_acc=0.3840  best_lr=1e-04  (7m04s)
+
+[sweep] ── n=400 (40/class) ──────────────────────
+  [probe] 100 epochs ...  val_acc=0.4350  (0m00s)
+  [scratch] 200 ep × 3 lrs ...  val_acc=0.4120  best_lr=1e-04  (10m02s)
+
+[sweep] ── n=4000 (400/class) ──────────────────────
+  [probe] 100 epochs ...  val_acc=0.5730  (0m01s)
+  [scratch] 200 ep × 3 lrs ...  val_acc=0.6360  best_lr=1e-03  (102m13s)
+
+========================================================================
+  PROBE GRID (val only)  |  ckpt=runs/tkqjawa0/best.ckpt  |  seed=0
+  probe=100ep  scratch=200ep × lr{1e-3,3e-4,1e-4}
+========================================================================
+      n    Probe   Scratch      Gap    BestLR
+------------------------------------------------------------------------
+     40   0.2930    0.2380  +0.0550     1e-03
+    200   0.3940    0.3840  +0.0100     1e-04
+    400   0.4350    0.4120  +0.0230     1e-04
+   4000   0.5730    0.6360  -0.0630     1e-03
+========================================================================
+
+[sweep] total wall time: 125m04s
+[sweep] saved → reports/probe_seed0_val.md
