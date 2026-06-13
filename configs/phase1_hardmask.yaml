@@ -1,0 +1,61 @@
+# phase1_hardmask.yaml -- Phase 1 harder-masking single-seed pilot.
+# Step 1.6 H2 fix: harder masking task to force stronger representations.
+#
+# Mask parameters chosen by scripts/mask_stats.py:
+#   - target_scale (0.20, 0.25)  -- up from (0.15, 0.20); larger predicted regions
+#   - context_scale (0.75, 0.90) -- down from (0.85, 1.00); less information shown
+#   - n_targets 4 (unchanged)
+#   Gate: 10,000 samples → ctx_after p5=26 (>=20), fallback=0.00% (<=2%). PASS.
+#
+# Pre-registered adoption rule (see PROJECT_STATE.md, Step 1.6):
+#   Adopt hardmask as production iff n=4000 locked-protocol probe acc >= 0.62
+#   AND target-encoder effective rank >= 96 / 192. Else hardmask is rejected
+#   and we revise the floor approach in DECISIONS.md.
+#
+# Run: uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0
+
+data:
+  n_images: null         # null = full 100k unlabeled split
+  augment: true          # RandomResizedCrop(96, 0.3-1.0) + RandomHorizontalFlip
+  batch_size: 256
+  num_workers: 4
+  seed: null             # overridden by --seed CLI arg
+
+masking:
+  n_targets: 4
+  target_scale:  [0.20, 0.25]
+  context_scale: [0.75, 0.90]
+  target_aspect:  [0.75, 1.50]
+  context_aspect: [0.75, 1.50]
+
+model:
+  img_size: 96
+  patch_size: 8
+  d_model: 192
+  enc_layers: 6
+  enc_heads: 3
+  pred_layers: 3
+  pred_width: 96
+  pred_heads: 3
+  sigreg_weight: 1.0
+  sigreg_projections: 64
+  ema_decay: 0.996
+  use_ema: true
+  dropout: 0.0
+
+train:
+  epochs: 150
+  lr: 1.0e-3
+  weight_decay: 0.04
+  warmup_epochs: 10
+  grad_clip: 1.0
+  ckpt_every: 10
+  diag_every: 1
+  ema_start: 0.996
+  ema_end: 1.0
+  use_amp: true
+
+wandb:
+  project: jepa-vision
+  entity: entropy_chess
+  tags: ["phase1-hardmask", "step-1.6"]

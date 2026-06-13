@@ -80,6 +80,23 @@ def _build_train_cfg(cfg: dict) -> TrainConfig:
     )
 
 
+def _build_mask_kwargs(cfg: dict) -> dict:
+    """Read optional cfg['masking'] block and return IJEPAMaskCollator kwargs.
+
+    YAML scales/aspects are lists; the collator wants tuples.
+    Missing keys fall back to the collator's hardcoded defaults.
+    """
+    msk = cfg.get("masking", {}) or {}
+    kwargs: dict = {}
+    if "n_targets" in msk:
+        kwargs["n_targets"] = int(msk["n_targets"])
+    for k in ("target_scale", "target_aspect", "context_scale", "context_aspect"):
+        if k in msk:
+            v = msk[k]
+            kwargs[k] = (float(v[0]), float(v[1]))
+    return kwargs
+
+
 def _build_loader(cfg: dict, seed: int | None):
     d = cfg["data"]
     data_dir = Path(__file__).parent.parent / "data"
@@ -92,6 +109,10 @@ def _build_loader(cfg: dict, seed: int | None):
     m = cfg["model"]
     n_h = m["img_size"] // m["patch_size"]
 
+    mask_kwargs = _build_mask_kwargs(cfg)
+    if mask_kwargs:
+        print(f"[train] masking override: {mask_kwargs}")
+
     if n_images is not None:
         # small subset -- use smoke loader (no augmentation regardless of flag)
         return get_smoke_loader(
@@ -101,6 +122,7 @@ def _build_loader(cfg: dict, seed: int | None):
             n_h=n_h,
             n_w=n_h,
             seed=loader_seed,
+            mask_kwargs=mask_kwargs,
         )
     else:
         return get_pretrain_loader(
@@ -111,6 +133,7 @@ def _build_loader(cfg: dict, seed: int | None):
             num_workers=num_workers,
             seed=loader_seed,
             drop_last=True,
+            mask_kwargs=mask_kwargs,
         )
 
 
@@ -199,6 +222,7 @@ def main() -> None:
                     "model": cfg["model"],
                     "train": cfg["train"],
                     "data": cfg["data"],
+                    "masking": cfg.get("masking", {}),
                     "seed": seed,
                     "device": device,
                 },

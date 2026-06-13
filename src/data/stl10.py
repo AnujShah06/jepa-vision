@@ -31,6 +31,7 @@ def get_pretrain_loader(
     num_workers: int = 4,
     seed: int | None = None,
     drop_last: bool = True,
+    mask_kwargs: dict | None = None,
 ) -> DataLoader:
     """
     Full 100k STL-10 unlabeled pretraining loader with proper augmentation.
@@ -38,6 +39,10 @@ def get_pretrain_loader(
     Transforms per PLAYBOOK §1.1:
       RandomResizedCrop(96, scale 0.3-1.0) + RandomHorizontalFlip + Normalize.
       No colour jitter -- JEPA-family methods deliberately avoid heavy augmentation.
+
+    mask_kwargs: optional dict of IJEPAMaskCollator kwargs (n_targets,
+      target_scale, target_aspect, context_scale, context_aspect). If None,
+      the collator's defaults (4 targets, target 0.15-0.20, ctx 0.85-1.00) apply.
 
     Batch format: same as get_smoke_loader.
     """
@@ -54,7 +59,8 @@ def get_pretrain_loader(
     ds = STL10(root=str(data_dir), split="unlabeled",
                transform=transform, download=True)
 
-    collator = IJEPAMaskCollator(n_h=n_h, n_w=n_w, seed=seed)
+    collator = IJEPAMaskCollator(n_h=n_h, n_w=n_w, seed=seed,
+                                 **(mask_kwargs or {}))
 
     return DataLoader(
         ds,
@@ -75,6 +81,7 @@ def get_smoke_loader(
     n_h: int = 12,
     n_w: int = 12,
     seed: int | None = None,
+    mask_kwargs: dict | None = None,
 ) -> DataLoader:
     """
     DataLoader over `n_images` from the STL-10 unlabeled split.
@@ -100,7 +107,8 @@ def get_smoke_loader(
                transform=transform, download=True)
     ds = Subset(ds, list(range(min(n_images, len(ds)))))
 
-    collator = IJEPAMaskCollator(n_h=n_h, n_w=n_w, seed=seed)
+    collator = IJEPAMaskCollator(n_h=n_h, n_w=n_w, seed=seed,
+                                 **(mask_kwargs or {}))
 
     return DataLoader(ds, batch_size=batch_size, shuffle=True,
                       collate_fn=collator, num_workers=0)

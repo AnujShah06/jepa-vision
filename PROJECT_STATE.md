@@ -12,7 +12,7 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.5d complete** — probe + from-scratch harness built, smoke-tested at n=200
+**Step 1.6 ready to launch** — hardmask config built, mask-stats gate passed, training command staged
 
 ---
 
@@ -66,8 +66,19 @@ Trainable params: 3,079,392. Total (incl. frozen target): 5,748,960 ≈ 6M.
 - **PASS** — save/load/resume pipeline works end-to-end
 
 **Production reference run — seed 0 (150 epochs, 100k unlabeled STL-10):**
-- W&B run ID: tkqjawa0  (checkpoint: runs/tkqjawa0/best.ckpt)
-- This IS the completed seed-0 production run; probe grid numbers in Step 1.5d are real.
+- W&B run ID: tkqjawa0  (checkpoint: runs/tkqjawa0/best.ckpt, best at epoch 143)
+- Gate 1A: PASSED — final eff_rank 175.3 (>50% of d=192 throughout)
+- Probe grid (Step 1.5d) numbers are real production numbers from this completed run.
+
+**Production reference run — seed 1 (150 epochs, 100k unlabeled STL-10):**
+- W&B run ID: lbd900za  (checkpoint: runs/lbd900za/best.ckpt)
+- Gate 1A: PASSED — final eff_rank 172.6, final loss 0.2102, pred_loss 0.2074
+
+**Production reference run — seed 2:**
+- Status: STILL TRAINING
+
+**MAE baseline training:**
+- Status: STILL TRAINING
 
 **Gate 0 re-run with block masking:**
 - W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/emfmwch0
@@ -205,26 +216,118 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 
 ## Next action
 
-**Phase 1, Step 1.5b — production reference run (3 seeds) + Gate 1A/1B:**
+**Gate 1B status — TERMINAL BENCHMARK POSTPONED**
 
-Run three seeds back-to-back (seed 1 in progress):
+Gate 1B criterion (ii) probe floor (≥70% @ n=4000) FAILING at 60.1% after probe diagnostics.
+Probe-side fixes exhausted (+3.0 pp recovered, −9.9 pp residual). Per pre-registered fork,
+this is a representation quality issue. The test set stays sealed until this resolves.
 
+**Current training status:**
+- Seed 0 (tkqjawa0): complete ✓
+- Seed 1 (lbd900za): complete ✓
+- Seed 2: still training
+- MAE baseline: still training
+
+**Step 1.6 — hardmask single-seed pilot, ready to launch:**
+Mask-stats gate passed at (b1) [4 tgt, target 0.20-0.25, ctx 0.75-0.90] — no levers needed.
+Config `configs/phase1_hardmask.yaml`, plumbing through `get_pretrain_loader`,
+parametrised tests over `{ref, hardmask}` (32 cells), all passing.
+
+Launch command (user runs):
 ```
-uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 0
-uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 1   ← in progress
-uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2
+uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0
 ```
 
-After each run, record the W&B link here and check Gate 1A (effective_rank > 96 throughout).
+**After the hardmask seed-0 run finishes, apply the pre-registered rule** (see Step 1.6 below):
+1. Locked probe protocol at n=4000 AND n=200 + rank diagnostics
+2. Adopt iff probe(n=4000) ≥ 0.62 AND rank ≥ 96/192 → queue seeds 1+2 on hardmask
+3. Else: rejection, literature-calibrated revision in DECISIONS.md
 
-After all 3 seeds are trained (150 epochs each):
-1. Re-run `probe_sweep.py` per seed; pool results → 3-seed mean ± std per cell
-2. Re-run `baseline_sanity.py` per seed; confirm JEPA energy > random-init with CI
-3. Gate 1B checks:
-   - (i) corruption AUROC clearly above random-init and pixel baselines (majority of corruption types)
-   - (ii) probe at n=4000 ≥ 70% val acc
-   - (iii) probe > scratch in most low-label cells (already 3/4 on seed-0 preliminary)
-4. Update DECISIONS.md with final frozen hyperparameters
+**Background, in parallel with the pilot:**
+- Seed 2 (`phase1_ref`): still training
+- MAE baseline: still training
+
+---
+
+## Step 1.6 — Harder masking pilot (single seed, pre-registered fork)
+
+**Status:** config + plumbing built and tested; training NOT YET launched.
+
+**Mask statistics gate** (`scripts/mask_stats.py --n_samples 10000 --seed 0`):
+
+| Config | n_tgt | target_scale | context_scale | tgt_union mean (p5/p95) | ctx_after mean (p5/p95) | fallback |
+|---|---|---|---|---|---|---|
+| (a) current `phase1_ref` | 4 | (0.15, 0.20) | (0.85, 1.00) | 69.7 (52/87) | 60.2 (41/80) | 0.00% |
+| (b1) hard `phase1_hardmask` | 4 | (0.20, 0.25) | (0.75, 0.90) | 80.2 (60/100) | 44.3 (26/64) | 0.00% |
+
+Gate criteria: ctx_after p5 ≥ 20 patches AND fallback ≤ 2%.
+**(b1) PASSES on the first try** — no lever adjustment needed.
+Figure: `reports/figures/mask_samples_hard.png`.
+
+**Pre-registered adoption rule** (apply after the hardmask seed-0 run finishes):
+
+After training, evaluate seed 0 on val with the locked probe protocol
+(target encoder + mean-pool + z-score + lr-swept 200-epoch head) at n=4000 AND n=200,
+plus target-encoder effective-rank diagnostics.
+
+**Adopt hardmask as production iff:**
+- n=4000 probe accuracy ≥ 0.62 (baseline 0.601 at ep150 + 2 pp), AND
+- target-encoder effective rank ≥ 96 / 192 (50% of d_model floor)
+
+**If adopted:**
+- Hardmask becomes the production config; queue seeds 1 + 2 with `phase1_hardmask.yaml`.
+- `phase1_ref.yaml` is demoted to "reference" (cocktail-style reference-vs-final framing).
+- Log frozen hyperparameters in DECISIONS.md.
+
+**If <+2pp or rank fails:**
+- Hardmask is rejected.
+- Confront the Gate 1B floor itself: literature-calibrated revision in DECISIONS.md
+  (candidate fixes: larger backbone, longer schedule, EMA momentum schedule,
+  or revisit the predictor width — to be pre-registered before training).
+
+**Files added (Step 1.6):**
+- `scripts/mask_stats.py` — 10k-sample mask-yield simulator + adoption gate
+- `configs/phase1_hardmask.yaml` — production-format config with explicit `masking:` block
+- `src/data/stl10.py` — `get_pretrain_loader` / `get_smoke_loader` now accept `mask_kwargs`
+- `scripts/train.py` — `_build_mask_kwargs` reads optional `cfg["masking"]` block
+- `tests/test_masking.py` — pytest-parametrised over `{ref, hardmask}` (32 cells, was 12)
+
+**Launch command (when ready):**
+```
+uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0
+```
+
+---
+
+## Step 1.5e — Probe-vs-epoch diagnostic (seed-0, val only)
+
+**Script:** `scripts/probe_vs_epoch.py --ckpt_dir /tmp/ckpts_probe_diag --seed 0`
+(No W&B link — evaluation script, not a training run.)
+**Figure:** `reports/figures/probe_vs_epoch.png`
+**Report:** `reports/probe_vs_epoch.md`
+
+| Epoch | tgt n=4000 | ctx n=4000 | gap (T−C) | tgt n=200 | ctx n=200 | gap (T−C) |
+|---|---|---|---|---|---|---|
+| 30  | 0.5610 | 0.5710 | −0.0100 | 0.3850 | 0.3890 | −0.0040 |
+| 60  | 0.5760 | 0.5650 | +0.0110 | 0.4250 | 0.4340 | −0.0090 |
+| 90  | 0.5870 | 0.5800 | +0.0070 | 0.4380 | 0.4470 | −0.0090 |
+| 120 | 0.6040 | 0.6040 | +0.0000 | 0.4250 | 0.4260 | −0.0010 |
+| 150 | 0.6000 | 0.6050 | −0.0050 | 0.4290 | 0.4290 | +0.0000 |
+
+**Pre-registered reading: H2 — curve plateaued by ~ep120**
+Δ(ep120→150) = −0.004 < 0.005 threshold. Curve peaks at ep120 and is flat/slightly declining at ep150.
+Next action: one from-scratch run with harder masking (target scale 0.20–0.25, context 0.75–0.90).
+
+**Observations:**
+- n=4000 curve rises 0.561→0.604 (ep30→ep120), then stalls (0.600 at ep150): clear plateau
+- n=200 curve similarly peaks at ep90 (0.438), then 0.429 at ep150: same pattern
+- Target ≈ context encoder gap throughout (|gap| ≤ 0.011 at all epochs) — EMA target not pulling ahead; consistent with easy masking task giving weak self-supervised signal
+- No epoch reaches the 0.70 Gate 1B floor — extending training alone will not close the gap
+
+**Files added (Step 1.5e):**
+- `scripts/probe_vs_epoch.py` — probe accuracy vs pretraining epoch curve
+- `reports/figures/probe_vs_epoch.png` — two-panel plot (n=4000 and n=200)
+- `reports/probe_vs_epoch.md` — table + pre-registered reading
 
 ---
 
