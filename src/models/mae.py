@@ -133,9 +133,11 @@ class PixelMAE(nn.Module):
         pos_dec = self.pos_proj(self.pos_embed)          # [1, N, dec_width]
         mask_toks = self.mask_token + pos_dec.expand(B, -1, -1)  # [B, N, dec_width]
 
-        # Overwrite visible positions with encoded (projected) features
-        # We need an in-place scatter — clone to avoid in-place autograd issues
-        dec_input = mask_toks.clone()
+        # Overwrite visible positions with encoded (projected) features.
+        # Clone to avoid in-place autograd issues; align dtype because under
+        # AMP the encoder/projection emit bfloat16 while pos_proj+mask_token
+        # may stay float32.
+        dec_input = mask_toks.clone().to(ctx_proj.dtype)
         dec_input[:, ctx_t, :] = ctx_proj
 
         # -- decode -------------------------------------------------------

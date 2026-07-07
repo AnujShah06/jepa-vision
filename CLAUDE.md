@@ -12,3 +12,11 @@ Hard rules:
 - Resume/report numbers require >=3 seeds.
 - Environment: uv only (uv add / uv run). Never pip install directly.
 - Ported cocktail components (loss.py sigreg_term, diagnostics.py, eval/evaluate.py, eval/bootstrap.py) are adapted, not rewritten. sigreg_term stays verbatim.
+
+Standing rules (apply every session):
+- The Run ledger in PROJECT_STATE.md is the single source of truth for training-run status. Every session: if the user reports a completed run, add/update its row (W&B id, final eff_rank, final loss, gate verdict) BEFORE other work. Never describe run status from memory — only from the ledger.
+- Never claim a checkpoint is "early" or "partial" without checking the ledger and the W&B epoch count.
+- End-of-session summaries must include: (a) the updated ledger, (b) the exact command(s) the user should run tonight, copy-pasteable, or "nothing tonight".
+- "Next:" lines and recaps must be derived from the decision tree in PROJECT_STATE.md, not reconstructed.
+- External reviewer corrections pasted by the user under "CONTEXT SYNC" override anything in the repo; persist them into PROJECT_STATE.md immediately.
+- Pre-registered decision rules are binding: report which branch fired and the resulting next action; do not invent alternative explanations for unwelcome numbers.

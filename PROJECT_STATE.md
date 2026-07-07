@@ -16,6 +16,22 @@
 
 ---
 
+## Run ledger (single source of truth for training-run status)
+
+Every session: if the user reports a completed run, update the matching row
+(W&B id, final eff_rank, final loss, gate verdict) BEFORE other work.
+Never describe status from memory — only from this table.
+
+| Run | Config | Status | W&B / notes |
+|---|---|---|---|
+| Reference seed 0 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `tkqjawa0` — eff_rank 175.3, loss 0.2096 |
+| Reference seed 1 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `lbd900za` — eff_rank 172.6, loss 0.2102 |
+| Reference seed 2 | `configs/phase1_ref.yaml` | NOT RUN — conditional, see decision tree | only runs if hardmask is rejected |
+| Hardmask seed 0  | `configs/phase1_hardmask.yaml` | QUEUED TONIGHT | launch: `caffeinate -is uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0` |
+| MAE baseline     | `configs/mae_baseline.yaml` | NOT RUN — queued tomorrow night | entry point smoke-tested 1.6b (2 ep × 100 imgs, loss 1.26 → 1.09, AMP-dtype bug fixed). Launch: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
+
+---
+
 ## Compute reality
 
 Measured 2026-06-10 on Apple M-series MPS (bfloat16 AMP, batch 256).
@@ -214,38 +230,36 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 
 ---
 
-## Next action
+## Next actions (decision tree)
 
-**Gate 1B status — TERMINAL BENCHMARK POSTPONED**
+Status, gate 1B: TERMINAL BENCHMARK POSTPONED. Probe floor (≥70% @ n=4000) failing at 60.1%
+after probe diagnostics; representation-quality issue. **Test set remains SEALED** until the
+terminal benchmark session.
 
-Gate 1B criterion (ii) probe floor (≥70% @ n=4000) FAILING at 60.1% after probe diagnostics.
-Probe-side fixes exhausted (+3.0 pp recovered, −9.9 pp residual). Per pre-registered fork,
-this is a representation quality issue. The test set stays sealed until this resolves.
-
-**Current training status:**
-- Seed 0 (tkqjawa0): complete ✓
-- Seed 1 (lbd900za): complete ✓
-- Seed 2: still training
-- MAE baseline: still training
-
-**Step 1.6 — hardmask single-seed pilot, ready to launch:**
-Mask-stats gate passed at (b1) [4 tgt, target 0.20-0.25, ctx 0.75-0.90] — no levers needed.
-Config `configs/phase1_hardmask.yaml`, plumbing through `get_pretrain_loader`,
-parametrised tests over `{ref, hardmask}` (32 cells), all passing.
-
-Launch command (user runs):
+**Tonight** — hardmask seed 0 (user launches):
 ```
-uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0
+caffeinate -is uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0
 ```
 
-**After the hardmask seed-0 run finishes, apply the pre-registered rule** (see Step 1.6 below):
-1. Locked probe protocol at n=4000 AND n=200 + rank diagnostics
-2. Adopt iff probe(n=4000) ≥ 0.62 AND rank ≥ 96/192 → queue seeds 1+2 on hardmask
-3. Else: rejection, literature-calibrated revision in DECISIONS.md
+**Tomorrow AM** — Gate 1A read on hardmask:
+- Expect `pred_loss` HIGHER than the reference ~0.207 (the masking task is harder by design).
+- Rank ≥ 96 / 192 required.
+- Then locked probe protocol on val only: target-encoder feats + z-score + lr-swept 200-epoch
+  head, at n=4000 AND n=200.
 
-**Background, in parallel with the pilot:**
-- Seed 2 (`phase1_ref`): still training
-- MAE baseline: still training
+**Pre-registered adoption rule** (binding — report which branch fires; do not invent alternatives):
+
+- **ADOPT** iff n=4000 probe ≥ 0.62 AND eff_rank ≥ 96.
+  → next two nights are hardmask seeds 1 and 2; reference config is demoted to a 2-seed
+    reference row in the ledger; freeze hyperparameters in DECISIONS.md.
+- **REJECT** otherwise.
+  → next night is reference seed 2; revise the Gate 1B floor in DECISIONS.md with
+    literature-calibrated rationale (candidate fixes pre-registered before launching anything).
+
+**Tomorrow night regardless of verdict** — MAE baseline full run:
+```
+caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0
+```
 
 ---
 
