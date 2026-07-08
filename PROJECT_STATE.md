@@ -12,7 +12,7 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6 ready to launch** — hardmask config built, mask-stats gate passed, training command staged
+**Step 1.6c COMPLETE** — hardmask adoption verdict: REJECTED. Next: reference seed 2 tonight, MAE baseline next night.
 
 ---
 
@@ -24,11 +24,14 @@ Never describe status from memory — only from this table.
 
 | Run | Config | Status | W&B / notes |
 |---|---|---|---|
-| Reference seed 0 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `tkqjawa0` — eff_rank 175.3, loss 0.2096 |
-| Reference seed 1 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `lbd900za` — eff_rank 172.6, loss 0.2102 |
-| Reference seed 2 | `configs/phase1_ref.yaml` | NOT RUN — conditional, see decision tree | only runs if hardmask is rejected |
-| Hardmask seed 0  | `configs/phase1_hardmask.yaml` | QUEUED TONIGHT | launch: `caffeinate -is uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0` |
-| MAE baseline     | `configs/mae_baseline.yaml` | NOT RUN — queued tomorrow night | entry point smoke-tested 1.6b (2 ep × 100 imgs, loss 1.26 → 1.09, AMP-dtype bug fixed). Launch: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
+| Reference seed 0 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `tkqjawa0` — eff_rank 175.3, loss 0.2096, pred_loss 0.2071. best.ckpt = epoch 143 |
+| Reference seed 1 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep54 | `8cw5vncy` — superseded by lbd900za |
+| Reference seed 1 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `lbd900za` — eff_rank 172.6, loss 0.2102, pred_loss 0.2074. best.ckpt = epoch 149 |
+| Reference seed 2 | `configs/phase1_ref.yaml` | NOT RUN — REJECT branch fires tonight | `caffeinate -is uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2` |
+| Hardmask seed 0  | `configs/phase1_hardmask.yaml` | DONE, Gate 1A passed. **Adoption REJECTED** (probe 0.587 < 0.62) | `fw1out6d` — eff_rank 189.2, loss 0.2933, pred_loss 0.2918 (ep150). best.ckpt is epoch 2 (checkpoint-saving bug — see note). Verdict used epoch_0150.ckpt. |
+| MAE baseline     | `configs/mae_baseline.yaml` | NOT RUN — night 2 after ref seed 2 | Entry point smoke-tested 1.6c (2 ep × 100 imgs, loss 1.318). Launch: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
+
+**Checkpoint-saving bug note:** For the hardmask run, pred_loss is NOT monotonically decreasing — it starts low (EMA target close to context encoder early in training) and rises as EMA momentum grows from 0.996→1.0. The checkpoint saver saved epoch 2 as "best" because it had the lowest pred_loss (0.2738). The correct fully-trained checkpoint is epoch_0150.ckpt (pred_loss 0.2918). The adoption verdict used epoch_0150.ckpt. This bug does not affect reference runs (their loss is monotonically decreasing). Must fix checkpoint saving for future runs that use increasing-difficulty schedules.
 
 ---
 
@@ -91,10 +94,10 @@ Trainable params: 3,079,392. Total (incl. frozen target): 5,748,960 ≈ 6M.
 - Gate 1A: PASSED — final eff_rank 172.6, final loss 0.2102, pred_loss 0.2074
 
 **Production reference run — seed 2:**
-- Status: STILL TRAINING
+- Status: NOT RUN (stale "STILL TRAINING" entry was fiction — no such run exists in runs/ or W&B. Deleted.)
 
 **MAE baseline training:**
-- Status: STILL TRAINING
+- Status: NOT RUN (stale "STILL TRAINING" entry was fiction. Entry point re-smoke-tested 2026-07-07: 2 ep × 100 imgs, loss 1.318. Deleted.)
 
 **Gate 0 re-run with block masking:**
 - W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/emfmwch0
@@ -232,34 +235,42 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 
 ## Next actions (decision tree)
 
-Status, gate 1B: TERMINAL BENCHMARK POSTPONED. Probe floor (≥70% @ n=4000) failing at 60.1%
-after probe diagnostics; representation-quality issue. **Test set remains SEALED** until the
-terminal benchmark session.
+**HARDMASK REJECTED (2026-07-07).** Pre-registered REJECT branch fires.
 
-**Tonight** — hardmask seed 0 (user launches):
-```
-caffeinate -is uv run python scripts/train.py --config configs/phase1_hardmask.yaml --seed 0
-```
+| Slot | Action |
+|---|---|
+| **Tonight** | Reference seed 2: `caffeinate -is uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2` |
+| Night 2 | MAE baseline: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
+| After MAE | **TERMINAL BENCHMARK SESSION** (Rule R3): test set opens once; all models × all seeds; bootstrap CIs; reports/phase1.md |
+| Then | Phase 2 kickoff (aerial imagery, RESISC45+AID) |
 
-**Tomorrow AM** — Gate 1A read on hardmask:
-- Expect `pred_loss` HIGHER than the reference ~0.207 (the masking task is harder by design).
-- Rank ≥ 96 / 192 required.
-- Then locked probe protocol on val only: target-encoder feats + z-score + lr-swept 200-epoch
-  head, at n=4000 AND n=200.
+**Gate 1B floor**: post-REJECT, floor revised in DECISIONS.md — small ViT, masked-prediction SSL, no color aug, STL-10 → plausible ceiling low-to-mid 60s. Claim scoped to low-label gaps + energy results. See DECISIONS.md.
 
-**Pre-registered adoption rule** (binding — report which branch fires; do not invent alternatives):
+---
 
-- **ADOPT** iff n=4000 probe ≥ 0.62 AND eff_rank ≥ 96.
-  → next two nights are hardmask seeds 1 and 2; reference config is demoted to a 2-seed
-    reference row in the ledger; freeze hyperparameters in DECISIONS.md.
-- **REJECT** otherwise.
-  → next night is reference seed 2; revise the Gate 1B floor in DECISIONS.md with
-    literature-calibrated rationale (candidate fixes pre-registered before launching anything).
+## Step 1.6c — Hardmask adoption verdict (2026-07-07)
 
-**Tomorrow night regardless of verdict** — MAE baseline full run:
-```
-caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0
-```
+**fw1out6d identity verification:** W&B config confirmed `--config configs/phase1_hardmask.yaml --seed 0`, launched 2026-06-13T00:32:28Z. Gate 1A: PASSED (eff_rank 189.2/192, pred_loss 0.2918 — higher than reference ~0.207 as pre-registered for harder task).
+
+**Unknown run resolved:** `8cw5vncy` = `phase1_ref.yaml --seed 1`, aborted at epoch 54, superseded by `lbd900za`. Added to ledger.
+
+**MAE entry point:** `scripts/train_mae.py` confirmed present and smoke-tested (2 ep × 100 imgs, loss 1.318).
+
+**Locked probe results on fw1out6d/epoch_0150.ckpt (val only):**
+
+| n | Target+zscore lr-sweep 200ep (LOCKED) | Context baseline | Target−Context gap |
+|---|---|---|---|
+| 4000 | **0.5870** | 0.5810 | +0.001 (gap ≤ 0.01 — harder masking did NOT differentiate EMA target) |
+| 200  | 0.4280 | 0.4130 | +0.015 |
+
+**Checkpoint mini-sweep {90,120}:** NOT POSSIBLE — fw1out6d only saved best.ckpt (epoch 2, bug) and epoch_0150.ckpt. Cannot read ep150−ep120 delta.
+
+**Target−context gap:** +0.001 at n=4000 — still ≤ 0.01. Harder masking did not materially change EMA differentiation. Same "too-easy EMA" signature as reference.
+
+**Pre-registered decision rule R1:** n=4000 ≥ 0.62 AND eff_rank ≥ 96 → ADOPT; otherwise → REJECT.
+- eff_rank 189.2 ≥ 96 ✓
+- n=4000 probe = 0.587 < 0.62 ✗
+- **REJECT branch fires.** Hardmask did not improve over reference (ref: 0.601; hardmask: 0.587 — 1.4pp regression).
 
 ---
 
