@@ -12,7 +12,7 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6c COMPLETE** — hardmask adoption verdict: REJECTED. Next: reference seed 2 tonight, MAE baseline next night.
+**Step 1.6e COMPLETE** — probe-variance adjudicated (σ_probe=0.0017, real encoder variance), Gate 1B floor revision written to DECISIONS.md (FOR HUMAN APPROVAL). Terminal harness built (`scripts/terminal_benchmark.py`). Next: MAE baseline (overnight), then terminal dry run.
 
 ---
 
@@ -24,12 +24,13 @@ Never describe status from memory — only from this table.
 
 | Run | Config | Status | W&B / notes |
 |---|---|---|---|
-| Reference seed 0 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `tkqjawa0` — eff_rank 175.3, loss 0.2096, pred_loss 0.2071. best.ckpt = epoch 143 |
-| Reference seed 1 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep54 | `8cw5vncy` — superseded by lbd900za |
-| Reference seed 1 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `lbd900za` — eff_rank 172.6, loss 0.2102, pred_loss 0.2074. best.ckpt = epoch 149 |
-| Reference seed 2 | `configs/phase1_ref.yaml` | NOT RUN — REJECT branch fires tonight | `caffeinate -is uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2` |
-| Hardmask seed 0  | `configs/phase1_hardmask.yaml` | DONE, Gate 1A passed. **Adoption REJECTED** (probe 0.587 < 0.62) | `fw1out6d` — eff_rank 189.2, loss 0.2933, pred_loss 0.2918 (ep150). best.ckpt is epoch 2 (checkpoint-saving bug — see note). Verdict used epoch_0150.ckpt. |
-| MAE baseline     | `configs/mae_baseline.yaml` | NOT RUN — night 2 after ref seed 2 | Entry point smoke-tested 1.6c (2 ep × 100 imgs, loss 1.318). Launch: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
+| Reference seed 0 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `tkqjawa0` — eff_rank 175.3, loss 0.2096, pred_loss 0.2071 (W&B final). best.ckpt=ep143. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.601 (probe seeds {0,1,2}: 0.600/0.601/0.603, σ=0.0015) |
+| Reference seed 1 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep54 — DO-NOT-USE | `8cw5vncy` — superseded by lbd900za |
+| Reference seed 1 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `lbd900za` — eff_rank 172.6, loss 0.2102, pred_loss 0.2074 (W&B final). best.ckpt=ep147. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.564 (probe seeds {0,1,2}: 0.564/0.564/0.564, σ=0.000) |
+| Reference seed 2 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep15 (session kill) | `37yyfu00` — superseded by gommvdgc |
+| Reference seed 2 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `gommvdgc` — eff_rank 173.2, loss 0.2072, pred_loss 0.2045, spread 19.54, var 0.995. best.ckpt=ep145. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.582 (probe seeds {0,1,2}: 0.582/0.579/0.584, σ=0.0025) |
+| Hardmask seed 0  | `configs/phase1_hardmask.yaml` | DONE, Gate 1A passed. **Adoption REJECTED** (probe 0.587 < 0.62) | `fw1out6d` — eff_rank 189.2, loss 0.2933, pred_loss 0.2918 (ep150). best.ckpt is epoch 2 (checkpoint-saving bug). **Canonical: epoch_0150.ckpt**. Probe n=4000 0.587 (statistically indistinguishable from reference spread 0.564–0.601) |
+| MAE baseline     | `configs/mae_baseline.yaml` | **DONE** | `eoofx7fk` (deep-music-14) — final loss 0.4630, epoch 149 (0-indexed). **Canonical: epoch_0150.ckpt** (150 % 10 == 0 ✓). best.ckpt valid (MAE loss monotone). W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/eoofx7fk |
 
 **Checkpoint-saving bug note:** For the hardmask run, pred_loss is NOT monotonically decreasing — it starts low (EMA target close to context encoder early in training) and rises as EMA momentum grows from 0.996→1.0. The checkpoint saver saved epoch 2 as "best" because it had the lowest pred_loss (0.2738). The correct fully-trained checkpoint is epoch_0150.ckpt (pred_loss 0.2918). The adoption verdict used epoch_0150.ckpt. This bug does not affect reference runs (their loss is monotonically decreasing). Must fix checkpoint saving for future runs that use increasing-difficulty schedules.
 
@@ -93,8 +94,9 @@ Trainable params: 3,079,392. Total (incl. frozen target): 5,748,960 ≈ 6M.
 - W&B run ID: lbd900za  (checkpoint: runs/lbd900za/best.ckpt)
 - Gate 1A: PASSED — final eff_rank 172.6, final loss 0.2102, pred_loss 0.2074
 
-**Production reference run — seed 2:**
-- Status: NOT RUN (stale "STILL TRAINING" entry was fiction — no such run exists in runs/ or W&B. Deleted.)
+**Production reference run — seed 2 (150 epochs, 100k unlabeled STL-10):**
+- W&B run ID: gommvdgc (flowing-wildflower-13)
+- Gate 1A: PASSED — final eff_rank 173.2, final loss 0.2072, pred_loss 0.2045, spread 19.54, var 0.995
 
 **MAE baseline training:**
 - Status: NOT RUN (stale "STILL TRAINING" entry was fiction. Entry point re-smoke-tested 2026-07-07: 2 ep × 100 imgs, loss 1.318. Deleted.)
@@ -239,12 +241,78 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 
 | Slot | Action |
 |---|---|
-| **Tonight** | Reference seed 2: `caffeinate -is uv run python scripts/train.py --config configs/phase1_ref.yaml --seed 2` |
-| Night 2 | MAE baseline: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
-| After MAE | **TERMINAL BENCHMARK SESSION** (Rule R3): test set opens once; all models × all seeds; bootstrap CIs; reports/phase1.md |
+| **Tonight** | MAE baseline: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
+| **Thursday dry run** | `uv run python scripts/terminal_benchmark.py --ref_ckpts runs/tkqjawa0/epoch_0150.ckpt runs/lbd900za/epoch_0150.ckpt runs/gommvdgc/epoch_0150.ckpt --hardmask_ckpt runs/fw1out6d/epoch_0150.ckpt [--mae_ckpt runs/<mae-run>/epoch_0150.ckpt] --dry_run --out reports/terminal_dryrun.md` |
+| **Weekend R3** | Same command without `--dry_run`, plus `--unlock_test` after swapping in test loader; write `reports/terminal_val.md` → `reports/phase1.md` |
 | Then | Phase 2 kickoff (aerial imagery, RESISC45+AID) |
 
 **Gate 1B floor**: post-REJECT, floor revised in DECISIONS.md — small ViT, masked-prediction SSL, no color aug, STL-10 → plausible ceiling low-to-mid 60s. Claim scoped to low-label gaps + energy results. See DECISIONS.md.
+
+---
+
+## Step 1.6e — Terminal harness built (2026-07-08)
+
+**`scripts/terminal_benchmark.py` — complete R3 evaluation harness:**
+
+- Stage 2: Corruption AUROC grid — 15 types × 5 severities (or 3 × 3 with `--dry_run`)
+- Stage 3: OOD AUROC — SVHN and CIFAR-10 downloaded on-the-fly to `data/ood/`
+- Stage 4: Probe grid — n ∈ {40, 200, 400, 4000}, locked protocol (target mean+zscore, lr-sweep, 200ep)
+- All models: ref seeds 0/1/2, hardmask_s0* (labeled rejected lever), MAE trained (if available, else flagged MISSING), pixel_std, random_init, Mahalanobis, mae_untrained
+- `--dry_run` flag: 3 corruption types for harness validation
+- `--unlock_test` guard: required to run against sealed test set
+- Output: Markdown report with tables + wall-clock summary to `--out` path
+
+Dry-run command (Thursday):
+```
+uv run python scripts/terminal_benchmark.py \
+    --ref_ckpts runs/tkqjawa0/epoch_0150.ckpt \
+                runs/lbd900za/epoch_0150.ckpt \
+                runs/gommvdgc/epoch_0150.ckpt \
+    --hardmask_ckpt runs/fw1out6d/epoch_0150.ckpt \
+    --dry_run --out reports/terminal_dryrun.md
+```
+Add `--mae_ckpt runs/<mae-run-id>/epoch_0150.ckpt` once MAE is trained.
+
+---
+
+## Step 1.6d — Seed-2 gate + seed-consistency probes (2026-07-08)
+
+**Reference seed 2 Gate 1A (gommvdgc):** finals in-band vs seeds 0/1 — eff_rank 173.2 (band 172.6–175.3), pred_loss 0.2045 (band 0.2047–0.2074), spread 19.54, var 0.995. Gate 1A: PASSED.
+
+**Seed-consistency probes (locked protocol, epoch_0150, n=4000, val only):**
+
+| Seed | W&B | Locked probe n=4000 | Gap from seed 0 |
+|---|---|---|---|
+| 0 | `tkqjawa0` | 0.603 | — |
+| 1 | `lbd900za` | 0.567 | −0.036 ⚠️ FLAG |
+| 2 | `gommvdgc` | 0.581 | −0.022 |
+
+Mean ≈ 0.584, spread 0.567–0.603 (~3.6pp).
+
+**⚠️ FLAG (pre-registered): seed 1 is 0.036 from seed 0, exceeding the >0.030 threshold. Limiting variable: under adjudication — probe-variance experiment, session 1.6e.**
+
+**Probe-variance experiment results (1.6e, binding):**
+
+| Encoder | Probe seeds {0,1,2} | Per-encoder mean | σ_probe |
+|---|---|---|---|
+| tkqjawa0 (train seed 0) | 0.600, 0.601, 0.603 | 0.601 | 0.0015 |
+| lbd900za (train seed 1) | 0.564, 0.564, 0.564 | 0.564 | 0.000 |
+| gommvdgc (train seed 2) | 0.582, 0.579, 0.584 | 0.582 | 0.0025 |
+
+Pooled σ_probe ≈ 0.0017. Decision rule fired: **σ_probe ≤ 0.005 → encoder-level seed variance is real.**
+
+σ_seed (std of per-encoder means {0.601, 0.564, 0.582}) = 0.019. Reference 3-seed result: **0.582 ± 0.019** (3 training seeds, locked protocol, epoch_0150, n=4000, val only).
+
+Reporting convention: report encoder-level mean ± σ_seed everywhere. No probe-seed averaging needed (σ_probe << σ_seed).
+
+Hardmask fw1out6d probe n=4000 = 0.587: falls inside the reference seed distribution (0.564–0.601) — statistically indistinguishable from the reference spread.
+
+**Hardmask rejection evidence (for results archive):**
+- fw1out6d locked protocol val probes: n=4000 0.587 / n=200 0.428
+- Reference (seed-0 epoch_0150): n=4000 0.603 / n=200 ~0.438
+- Target−context gap +0.001 (same too-easy-EMA signature as reference)
+- Pretext pred_loss 0.292 vs 0.207 (+41% difficulty), no transfer gain
+- Interpretation on record: masking-difficulty lever pulled and measured, did not improve transfer; with probe-vs-epoch plateau at ep120, the ~0.60 probe number is a property of the recipe/regime, not an unfinished tuning job. Single-seed comparison — 1.4pp deficit phrased as "did not improve; if anything slightly lower (single seed)", not a proven regression.
 
 ---
 

@@ -20,3 +20,4 @@ Standing rules (apply every session):
 - "Next:" lines and recaps must be derived from the decision tree in PROJECT_STATE.md, not reconstructed.
 - External reviewer corrections pasted by the user under "CONTEXT SYNC" override anything in the repo; persist them into PROJECT_STATE.md immediately.
 - Pre-registered decision rules are binding: report which branch fired and the resulting next action; do not invent alternative explanations for unwelcome numbers.
+- Git norm: executor never stages or commits. Every session ends by handing Anuj the commit message alongside tonight's command.
