@@ -11,3 +11,7 @@ data/stl10_binary.tar.gz
 *.egg-info/
 dist/
 .pytest_cache/
+# datasets are (re)downloadable — never version them; frozen splits stay committed
+data/*
+!data/splits/
+.Rhistory

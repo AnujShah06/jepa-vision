@@ -98,7 +98,12 @@ def _corrupt_tensor(imgs: torch.Tensor, corruption: str, severity: int) -> torch
     corrupted = []
     for i in range(imgs_u8.shape[0]):
         hwc = imgs_u8[i].transpose(1, 2, 0)
-        out = corrupt(hwc, corruption_name=corruption, severity=severity)
+        try:
+            out = corrupt(hwc, corruption_name=corruption, severity=severity)
+        except (TypeError, AttributeError) as e:
+            # Library incompatibility (scikit-image multichannel / numpy np.float_)
+            print(f"\n  [SKIP] {corruption} sev={severity}: {e}", flush=True)
+            return None
         corrupted.append(out.transpose(2, 0, 1))
 
     cf = torch.from_numpy(np.stack(corrupted).astype("float32")) / 255.0
@@ -114,6 +119,55 @@ def _jepa_energy(model: VisionJEPA, imgs: torch.Tensor, K: int, device: str) -> 
     """K-sample latent prediction energy. Returns [B] on CPU."""
     model.eval()
     return image_energy(model, imgs.to(device), K=K, seed=0, device=device)["energy"].cpu()
+
+
+@torch.no_grad()
+def _jepa_energy_batched(
+    model: VisionJEPA,
+    imgs: torch.Tensor,
+    K: int,
+    device: str,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Batched version of _jepa_energy for large tensors (e.g. OOD sets)."""
+    chunks = []
+    for i in range(0, imgs.shape[0], batch_size):
+        chunks.append(_jepa_energy(model, imgs[i : i + batch_size], K, device))
+    return torch.cat(chunks)
+
+
+@torch.no_grad()
+def _mahal_energy_batched(
+    imgs: torch.Tensor,
+    model: VisionJEPA,
+    mean: torch.Tensor,
+    prec: torch.Tensor,
+    device: str,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Batched mahalanobis_energy for large tensors."""
+    chunks = []
+    for i in range(0, imgs.shape[0], batch_size):
+        chunks.append(mahalanobis_energy(imgs[i : i + batch_size], model, mean, prec, device))
+    return torch.cat(chunks)
+
+
+def _random_init_energy_batched(
+    imgs: torch.Tensor,
+    K: int,
+    device: str,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Batched random_init_energy — creates one fresh model, reuses it."""
+    model = VisionJEPA(VisionJEPAConfig()).to(device).eval()
+    chunks = []
+    with torch.no_grad():
+        for i in range(0, imgs.shape[0], batch_size):
+            chunks.append(
+                image_energy(model, imgs[i : i + batch_size].to(device),
+                             K=K, seed=0, device=device)["energy"].cpu()
+            )
+    return torch.cat(chunks)
 
 
 @torch.no_grad()
@@ -287,6 +341,11 @@ def main() -> None:
     if args.split == "test" and not args.unlock_test:
         sys.exit("ERROR: --unlock_test required to run against the sealed test set.")
 
+    # Test set is unreachable in this script: --split only accepts "val";
+    # --unlock_test + "test" is the sealed-test guard for future R3 extension.
+    # All evaluation routes through src/eval/ only.
+    assert args.split == "val", "Only val split is active in this harness"
+
     device      = _pick_device()
     corruptions = DRY_RUN_CORRUPTIONS if args.dry_run else ALL_CORRUPTIONS
     severities  = DRY_RUN_SEVERITIES  if args.dry_run else ALL_SEVERITIES
@@ -296,6 +355,20 @@ def main() -> None:
           f"corruptions={len(corruptions)}×{len(severities)} severities")
 
     OOD_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── Data manifest ─────────────────────────────────────────────────────────
+    import json
+    val_split_file = DATA_DIR / "splits" / "stl10_val_idx.json"
+    with open(val_split_file) as _f:
+        _split_meta = json.load(_f)
+    _n_val   = len(_split_meta["indices"])
+    _n_probe = _split_meta["n_train_total"] - _n_val
+    print(f"[manifest] val={_n_val} (from data/splits/stl10_val_idx.json, stratified 100/class seed=0)")
+    print(f"[manifest] probe_pool={_n_probe} (STL-10 labeled train complement of val)")
+    print(f"[manifest] OOD: SVHN test + CIFAR-10 test (downloaded to data/ood/)")
+    print(f"[manifest] STL-10 unlabeled/test: NOT LOADED (test routes only via src/eval/, never here)")
+    assert _n_val == 1000, f"Val split size mismatch: expected 1000, got {_n_val}"
+    assert _n_probe == 4000, f"Probe pool size mismatch: expected 4000, got {_n_probe}"
 
     # ── Load val images as one tensor ────────────────────────────────────────
     t0 = time.time()
@@ -375,10 +448,16 @@ def main() -> None:
         lbl: {c: {} for c in corruptions} for lbl in all_labels
     }
 
+    skipped_cells: list[str] = []
+
     for ci, corruption in enumerate(corruptions):
         for severity in severities:
             t0 = time.time()
             cor_imgs = _corrupt_tensor(clean_imgs, corruption, severity)
+
+            if cor_imgs is None:
+                skipped_cells.append(f"{corruption}/sev{severity}")
+                continue
 
             for label, model in jepa_models.items():
                 corr_results[label][corruption][severity] = bootstrap_auroc_ci(
@@ -437,26 +516,27 @@ def main() -> None:
             ood_results[ood_name] = {"_error": str(exc)}
             continue
 
+        # OOD sets can be large (SVHN=26k, CIFAR-10=10k): use batched helpers throughout
         ood_results[ood_name] = {}
         for label, model in jepa_models.items():
             ood_results[ood_name][label] = bootstrap_auroc_ci(
                 clean_e[label],
-                _jepa_energy(model, ood_imgs, args.K, device),
+                _jepa_energy_batched(model, ood_imgs, args.K, device),
                 n_boot=args.n_boot,
             )
         ood_results[ood_name]["pixel_std"] = bootstrap_auroc_ci(
             clean_e["pixel_std"],
-            pixel_stats_energy(ood_imgs.to(device)).cpu(),
+            pixel_stats_energy(ood_imgs),   # CPU only, no MPS
             n_boot=args.n_boot,
         )
         ood_results[ood_name]["random_init"] = bootstrap_auroc_ci(
             clean_e["random_init"],
-            random_init_energy(ood_imgs, K=args.K, seed=0, device=device),
+            _random_init_energy_batched(ood_imgs, K=args.K, device=device),
             n_boot=args.n_boot,
         )
         ood_results[ood_name]["mahalanobis"] = bootstrap_auroc_ci(
             clean_e["mahalanobis"],
-            mahalanobis_energy(ood_imgs, ref_model, mu_maha, prec_maha, device),
+            _mahal_energy_batched(ood_imgs, ref_model, mu_maha, prec_maha, device),
             n_boot=args.n_boot,
         )
         if mae_model is not None:
@@ -469,17 +549,24 @@ def main() -> None:
     stage3_wall = time.time() - stage3_t0
     print(f"  Stage 3 wall: {stage3_wall:.1f}s")
 
-    # ── Stage 4: Probe grid ───────────────────────────────────────────────────
-    print("\n[Stage 4] Probe grid ...")
+    # ── Stage 4: Probe grid (3 probe seeds per cell) ─────────────────────────
+    print("\n[Stage 4] Probe grid (3 probe seeds per cell) ...")
     stage4_t0 = time.time()
     n_list = [40, 200, 400, 4000]
-    probe_results: dict[str, dict[int, float]] = {}
+    probe_seeds = [0, 1, 2]
+    # label → n → [acc_seed0, acc_seed1, acc_seed2]
+    probe_results: dict[str, dict[int, list[float]]] = {}
 
     for label, model in jepa_models.items():
-        print(f"  {label} ...", end=" ", flush=True)
-        t0 = time.time()
-        probe_results[label] = _run_probe_grid(model, val_loader, n_list, device)
-        print(f"{time.time()-t0:.1f}s  n=4000={probe_results[label][4000]:.4f}")
+        probe_results[label] = {n: [] for n in n_list}
+        for ps in probe_seeds:
+            print(f"  {label} probe_seed={ps} ...", end=" ", flush=True)
+            t0 = time.time()
+            seed_r = _run_probe_grid(model, val_loader, n_list, device, probe_seed=ps)
+            print(f"{time.time()-t0:.1f}s  " +
+                  "  ".join(f"n={n}={seed_r[n]:.4f}" for n in n_list))
+            for n in n_list:
+                probe_results[label][n].append(seed_r[n])
 
     stage4_wall = time.time() - stage4_t0
     print(f"  Stage 4 wall: {stage4_wall:.1f}s")
@@ -504,6 +591,14 @@ def main() -> None:
         "",
         "**MAE trained: " + ("INCLUDED" if mae_model else "MISSING — not yet trained") + "**",
         "**hardmask_s0\\*: single seed, REJECTED lever (R1)**",
+    ]
+    if skipped_cells:
+        lines += [
+            f"**SKIPPED (library incompatibility): {', '.join(skipped_cells)}**",
+            "  glass_blur: scikit-image gaussian() multichannel kwarg removed",
+            "  fog:        numpy np.float_ removed in NumPy 2.0",
+        ]
+    lines += [
         "",
         "---",
         "",
@@ -571,20 +666,47 @@ def main() -> None:
         c1 = ood_results.get("cifar10", {}).get(lbl, {}).get("point", float("nan"))
         lines.append(f"{lbl:<20}  {_fmt(sv):>8}  {_fmt(c1):>10}")
 
+    def _pmean(vals: list[float]) -> float:
+        return sum(vals) / len(vals) if vals else float("nan")
+
+    def _pstd(vals: list[float]) -> float:
+        if len(vals) < 2:
+            return float("nan")
+        m = _pmean(vals)
+        return (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
+
+    def _ms(vals: list[float]) -> str:
+        return f"{_pmean(vals):.4f}±{_pstd(vals):.4f}"
+
     lines += [
         "",
-        "## Stage 4 — Probe Grid (locked: target mean+zscore, lr-sweep, 200ep)",
+        "## Stage 4 — Probe Grid (locked: target mean+zscore, lr-sweep, 200ep, 3 probe seeds)",
         "",
-        f"{'Model':<20}  {'n=40':>6}  {'n=200':>6}  {'n=400':>6}  {'n=4000':>7}",
-        "-" * 53,
+        f"{'Model':<20}  {'n=40':>12}  {'n=200':>12}  {'n=400':>12}  {'n=4000':>13}",
+        "-" * 75,
     ]
     for lbl, pr in probe_results.items():
         lines.append(
-            f"{lbl:<20}  {pr.get(40, float('nan')):>6.4f}  "
-            f"{pr.get(200, float('nan')):>6.4f}  "
-            f"{pr.get(400, float('nan')):>6.4f}  "
-            f"{pr.get(4000, float('nan')):>7.4f}"
+            f"{lbl:<20}  {_ms(pr.get(40,  [])):>12}  "
+            f"{_ms(pr.get(200, [])):>12}  "
+            f"{_ms(pr.get(400, [])):>12}  "
+            f"{_ms(pr.get(4000,[])):>13}"
         )
+
+    lines += [
+        "",
+        "### Stage 4 detail — per probe seed",
+        "",
+        f"{'Model/seed':<26}  {'n=40':>6}  {'n=200':>6}  {'n=400':>6}  {'n=4000':>7}",
+        "-" * 60,
+    ]
+    for lbl, pr in probe_results.items():
+        for i, ps in enumerate(probe_seeds):
+            row = f"{lbl+' s='+str(ps):<26}  "
+            row += "  ".join(
+                f"{pr.get(n, [float('nan')]*(i+1))[i]:>6.4f}" for n in n_list
+            )
+            lines.append(row)
 
     total_wall = stage2_wall + stage3_wall + stage4_wall
     lines += [

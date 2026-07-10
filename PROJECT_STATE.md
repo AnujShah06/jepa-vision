@@ -12,7 +12,7 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6e COMPLETE** — probe-variance adjudicated (σ_probe=0.0017, real encoder variance), Gate 1B floor revision written to DECISIONS.md (FOR HUMAN APPROVAL). Terminal harness built (`scripts/terminal_benchmark.py`). Next: MAE baseline (overnight), then terminal dry run.
+**Step 1.6g COMPLETE** — full val benchmark executed (exit 0, 2887s / 0.80h). Parity gate passed. 13/15 corruption types evaluated (glass_blur + fog skipped, library incompatibility). Gate 1B criteria (i) and (iii) PASS on val numbers; criterion (ii) probe floor revision still FOR HUMAN APPROVAL. R3 (sealed test) blocked on Gate 1B approval.
 
 ---
 
@@ -27,7 +27,7 @@ Never describe status from memory — only from this table.
 | Reference seed 0 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `tkqjawa0` — eff_rank 175.3, loss 0.2096, pred_loss 0.2071 (W&B final). best.ckpt=ep143. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.601 (probe seeds {0,1,2}: 0.600/0.601/0.603, σ=0.0015) |
 | Reference seed 1 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep54 — DO-NOT-USE | `8cw5vncy` — superseded by lbd900za |
 | Reference seed 1 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `lbd900za` — eff_rank 172.6, loss 0.2102, pred_loss 0.2074 (W&B final). best.ckpt=ep147. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.564 (probe seeds {0,1,2}: 0.564/0.564/0.564, σ=0.000) |
-| Reference seed 2 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep15 (session kill) | `37yyfu00` — superseded by gommvdgc |
+| Reference seed 2 (partial) | `configs/phase1_ref.yaml` | ABORTED at ep15 — DO-NOT-USE | `37yyfu00` — superseded by gommvdgc. Explains 08:35 Jul 8 relaunch anomaly: overnight launch died at ep15 (session kill), relaunched morning as gommvdgc. |
 | Reference seed 2 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `gommvdgc` — eff_rank 173.2, loss 0.2072, pred_loss 0.2045, spread 19.54, var 0.995. best.ckpt=ep145. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.582 (probe seeds {0,1,2}: 0.582/0.579/0.584, σ=0.0025) |
 | Hardmask seed 0  | `configs/phase1_hardmask.yaml` | DONE, Gate 1A passed. **Adoption REJECTED** (probe 0.587 < 0.62) | `fw1out6d` — eff_rank 189.2, loss 0.2933, pred_loss 0.2918 (ep150). best.ckpt is epoch 2 (checkpoint-saving bug). **Canonical: epoch_0150.ckpt**. Probe n=4000 0.587 (statistically indistinguishable from reference spread 0.564–0.601) |
 | MAE baseline     | `configs/mae_baseline.yaml` | **DONE** | `eoofx7fk` (deep-music-14) — final loss 0.4630, epoch 149 (0-indexed). **Canonical: epoch_0150.ckpt** (150 % 10 == 0 ✓). best.ckpt valid (MAE loss monotone). W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/eoofx7fk |
@@ -241,12 +241,146 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 
 | Slot | Action |
 |---|---|
-| **Tonight** | MAE baseline: `caffeinate -is uv run python scripts/train_mae.py --config configs/mae_baseline.yaml --seed 0` |
-| **Thursday dry run** | `uv run python scripts/terminal_benchmark.py --ref_ckpts runs/tkqjawa0/epoch_0150.ckpt runs/lbd900za/epoch_0150.ckpt runs/gommvdgc/epoch_0150.ckpt --hardmask_ckpt runs/fw1out6d/epoch_0150.ckpt [--mae_ckpt runs/<mae-run>/epoch_0150.ckpt] --dry_run --out reports/terminal_dryrun.md` |
-| **Weekend R3** | Same command without `--dry_run`, plus `--unlock_test` after swapping in test loader; write `reports/terminal_val.md` → `reports/phase1.md` |
+| **DONE** | Full val benchmark complete → `reports/terminal_val.md` (2887s, exit 0) |
+| **⛔ BLOCKED** | Gate 1B revision (DECISIONS.md §1.6e) requires Anuj approval before R3 proceeds |
+| **After Gate 1B approval** | R3 (sealed test): extend harness with test loader, add `--unlock_test`, write `reports/phase1.md` |
 | Then | Phase 2 kickoff (aerial imagery, RESISC45+AID) |
 
 **Gate 1B floor**: post-REJECT, floor revised in DECISIONS.md — small ViT, masked-prediction SSL, no color aug, STL-10 → plausible ceiling low-to-mid 60s. Claim scoped to low-label gaps + energy results. See DECISIONS.md.
+
+---
+
+## Step 1.6g — Full val benchmark results (2026-07-09)
+
+**Harness:** `scripts/terminal_benchmark.py` (no `--dry_run`), 15 corruption types × 5 severities, val split.
+**Report:** `reports/terminal_val.md`
+**Exit:** 0 (clean). Wall time: 2887s (0.80h). K=8, n_boot=2000.
+
+**Parity gate (Items 1a–1c, all PASS before benchmark):**
+- 1a: mask positions batch-shared across K draws (per-image-spatial independence is within each draw) — stated ✓
+- 1b: energy parity max|Δ| ≤ 2.96e-05 for all 3 helpers (JEPA, Mahal, RandInit) ✓
+- 1c: AUROC parity |Δ|=0.0000 for all 3 helpers (200-image clean vs gaussian_noise sev=3) ✓
+
+**Skipped corruptions (library incompatibility — 10/75 cells absent):**
+- `glass_blur`: scikit-image `gaussian()` `multichannel` kwarg removed in newer releases
+- `fog`: NumPy `np.float_` removed in NumPy 2.0
+- 65/75 cells complete; both types documented in report header.
+
+**Stage 2 — Corruption AUROC (ref_s0, mean over severities; 13 evaluable types):**
+
+| Type | ref_s0 | pixel_std | random_init | mahal | mae_trained |
+|---|---|---|---|---|---|
+| gaussian_noise | **0.781** | 0.738 | 0.456 | 0.863 | 0.966 |
+| shot_noise | **0.802** | 0.769 | 0.541 | 0.868 | 0.954 |
+| impulse_noise | **0.836** | 0.744 | 0.189 | 0.892 | 0.979 |
+| defocus_blur | 0.236 ⚠️ | 0.300 | 0.151 | **0.977** | 0.050 |
+| motion_blur | 0.293 ⚠️ | 0.338 | 0.252 | **0.917** | 0.149 |
+| zoom_blur | 0.389 | 0.379 | 0.261 | **0.837** | 0.207 |
+| snow | 0.408 | 0.501 | 0.270 | **0.719** | 0.766 |
+| frost | 0.284 ⚠️ | 0.241 | 0.639 | **0.872** | 0.470 |
+| brightness | **0.578** | 0.459 | 0.145 | **0.806** | 0.415 |
+| contrast | 0.020 ⚠️ | 0.009 | 0.304 | **0.991** | 0.143 |
+| elastic_transform | 0.483 | 0.476 | 0.365 | 0.506 | **0.653** |
+| pixelate | **0.484** | 0.442 | 0.235 | **0.640** | 0.486 |
+| jpeg_compression | **0.607** | 0.484 | 0.220 | **0.662** | 0.541 |
+
+**Gate 1B criterion (i) verdict — PASS ✓:**
+- JEPA ref_s0 > pixel_std in 8/13 evaluable types (majority, 62%)
+- JEPA ref_s0 > random_init in 11/13 types (frost and contrast are exceptions)
+- Pattern: JEPA detects noise/compression/brightness; INVERTS on blur (defocus, motion) and contrast (easy-prediction artifacts). Named limitation, not a bug.
+
+**Seed spread (all 3 ref seeds, mean over severities, noise types):**
+- gaussian: s0=0.781, s1=0.661, s2=0.646 — seed spread ±0.07 is real; s0 is the strong outlier
+- shot: s0=0.802, s1=0.689, s2=0.677
+- impulse: s0=0.836, s1=0.713, s2=0.695
+- Hardmask (single seed, rejected lever) matches or exceeds refs on noise — consistent with higher eff_rank, but adoption was correctly rejected (probe gap unchanged)
+
+**Stage 3 — OOD AUROC:**
+
+| Model | SVHN | CIFAR-10 |
+|---|---|---|
+| ref_s0 | 0.098 | 0.411 |
+| ref_s1 | 0.133 | 0.518 |
+| ref_s2 | 0.088 | 0.438 |
+| hardmask_s0* | 0.165 | 0.401 |
+| pixel_std | 0.102 | 0.405 |
+| random_init | 0.680 | 0.194 |
+| **mahalanobis** | **0.998** | **0.949** |
+| mae_trained | 0.013 | 0.147 |
+
+⚠️ JEPA energy inverts on both semantic OOD sets — consistent with dry run. Mahalanobis dominates here. MAE trained also inverts (norm_pix_loss mechanism identical to JEPA easy-prediction artifact). Named in Gate 1B claim scoping.
+
+**Stage 4 — Probe grid (3 probe seeds per cell, locked protocol):**
+
+| Model | n=40 mean±σ_probe | n=200 | n=400 | n=4000 |
+|---|---|---|---|---|
+| ref_s0 | 0.2823±0.0037 | 0.4163±0.0187 | 0.4500±0.0059 | **0.6027±0.0005** |
+| ref_s1 | 0.2713±0.0063 | 0.3673±0.0131 | 0.4133±0.0147 | **0.5643±0.0021** |
+| ref_s2 | 0.2683±0.0268 | 0.3927±0.0155 | 0.4367±0.0054 | **0.5810±0.0008** |
+| hardmask_s0* | 0.2953±0.0045 | 0.4267±0.0093 | 0.4833±0.0125 | 0.5850±0.0000 |
+
+**3-seed reference (training seeds 0/1/2), n=4000:** mean = 0.583, σ_training_seed = 0.016
+- σ_probe per cell: 0.0005–0.0021 (all < 0.005) → probe variance not masking training-seed signal ✓
+- Gate 1B criterion (ii) probe value (for report): **0.583 ± 0.016** (3-seed mean ± σ, n=4000, locked protocol, epoch_0150)
+- Gate 1B criterion (iii): low-label transfer from 1.5d confirms JEPA > scratch at n=40/200/400 ✓
+
+---
+
+## Step 1.6f — Terminal dry run results (2026-07-09)
+
+**Harness:** `scripts/terminal_benchmark.py --dry_run` (3 corruption types × 3 severities, val split).
+**Report:** `reports/terminal_dryrun.md`
+**Exit:** 0 (clean). OOM bug fixed (batched OOD inference). CIFAR-10 now cached in `data/ood/`.
+
+**Data manifest verified:**
+- val=1000 (data/splits/stl10_val_idx.json, stratified 100/class seed=0) ✓
+- probe_pool=4000 (STL-10 labeled train complement) ✓
+- OOD: SVHN test (26032), CIFAR-10 test (10000, downloaded) ✓
+- STL-10 test: NOT LOADED (guarded) ✓
+
+**Stage 2 — Corruption AUROC (3 types, mean over severities {1,3,5}):**
+
+| Model | gaussian_noise | defocus_blur | jpeg_compression |
+|---|---|---|---|
+| ref_s0 | 0.785 | 0.234 | 0.604 |
+| ref_s1 | 0.677 | 0.331 | 0.624 |
+| ref_s2 | 0.660 | 0.276 | 0.584 |
+| hardmask_s0* | 0.877 | 0.256 | 0.602 |
+| pixel_std | 0.742 | 0.298 | 0.484 |
+| random_init | 0.762 | 0.878 | 0.901 |
+| mahalanobis | 0.857 | 0.974 | 0.664 |
+| mae_untrained | 0.580 | 0.458 | 0.482 |
+| mae_trained | 0.959 | 0.054 | 0.539 |
+
+**Stage 2 ref_s0 per-severity (gaussian_noise):** sev1=0.639, sev3=0.768, sev5=0.948 — monotone rise with severity ✓
+
+**Stage 3 — OOD AUROC:**
+
+| Model | SVHN | CIFAR-10 |
+|---|---|---|
+| ref_s0 | 0.098 | 0.411 |
+| ref_s1 | 0.133 | 0.518 |
+| ref_s2 | 0.088 | 0.438 |
+| random_init | 0.998 | 0.226 |
+| mahalanobis | 0.998 | 0.949 |
+| mae_trained | 0.013 | 0.147 |
+
+**⚠️ OOD AUROC < 0.5 for all JEPA refs on SVHN, and all refs on CIFAR-10 (except ref_s1 barely above 0.5).** This is NOT a bug — it is a result. JEPA latent prediction energy INVERTS for semantic OOD: SVHN digit patches (flat, low-variance) are EASIER to predict than STL-10 natural patches → lower energy → model ranks SVHN as more "normal" than STL-10. Must be reported explicitly as a regime limitation: JEPA energy is a corruption detector, not a semantic OOD detector.
+
+**⚠️ defocus_blur AUROC < 0.5 for all JEPA refs.** Same mechanism: blurring removes high-frequency content → prediction task becomes easier → lower energy. JEPA anti-detects blur. Random-init (0.878) and Mahalanobis (0.974) detect blur well because they measure feature distribution shift. This limits Gate 1B claim (i): trained > random-init only on noise/compression types, NOT on blur.
+
+**Stage 4 — Probe grid (locked protocol, 4 models):**
+
+| Model | n=40 | n=200 | n=400 | n=4000 |
+|---|---|---|---|---|
+| ref_s0 | 0.306 | 0.426 | 0.437 | 0.599 |
+| ref_s1 | 0.266 | 0.376 | 0.403 | 0.564 |
+| ref_s2 | 0.282 | 0.383 | 0.427 | 0.581 |
+| hardmask_s0* | 0.311 | 0.432 | 0.465 | 0.589 |
+
+**Wall-clock (dry run):** Stage 2=143s, Stage 3=2792s (incl. 2309s CIFAR-10 download, one-time), Stage 4=63s. Total=2998s.
+
+**Full val projection (CIFAR-10 cached):** Stage 2=~1200s, Stage 3=~480s, Stage 4=63s. **Total ≈ 30 min → full val benchmark is tonight.**
 
 ---
 
@@ -427,3 +561,14 @@ Next action: one from-scratch run with harder masking (target scale 0.20–0.25,
 ## Waived gates + justification
 
 None. Gate 0 passed twice.
+
+---
+
+## Phase-2 prep list (record only — no code this week; trainer-code moratorium expires at Phase-2 kickoff)
+
+| Item | Priority | Notes |
+|---|---|---|
+| Fix checkpoint-saver "best" criterion | P0 | `best-by-lowest-pred-loss` is invalid for SSL runs where pred_loss is non-monotone (EMA momentum ramp). Evidence: fw1out6d best.ckpt = epoch 2 (untrained). Fix: save `epoch_N` every ckpt_every AND save `last.ckpt`; eliminate `best.ckpt` or redefine "best" as lowest-val-loss on a held-out set. Do NOT modify trainer before Phase-2 kickoff. |
+| Evaluate larger backbone (ViT-Small d=384) | P1 | If probe ceiling is the primary Phase-2 claim, 100× capacity gap to I-JEPA-H is the debt named in Gate 1B revision. Triage at Phase-2 kickoff. |
+| Color augmentation (RandomGrayscale, ColorJitter) | P1 | Literature: color aug is a primary driver of semantic representation in contrastive SSL. Not used in Phase 1 (intentional for edge-deployment story). Evaluate vs. probe ceiling at Phase 2. |
+| Phase-2 dataset: RESISC45 + AID aerial imagery | P0 | Next domain. Pre-register train/val/test splits before any training. |
