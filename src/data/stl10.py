@@ -224,3 +224,23 @@ def get_eval_loader(
         num_workers=num_workers,
         drop_last=False,
     )
+
+
+def get_test_loader(
+    data_dir: str | Path,
+    batch_size: int = 256,
+    num_workers: int = 0,
+) -> DataLoader:
+    """
+    STL-10 sealed test split (8,000 images, 800/class).
+
+    SEALED — only called from terminal_benchmark.py when --unlock_test is
+    passed.  Never call from training code or model-selection loops.
+    """
+    return get_eval_loader(
+        data_dir=data_dir,
+        split="test",
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=False,
+    )

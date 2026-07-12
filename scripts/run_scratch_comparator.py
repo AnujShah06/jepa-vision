@@ -1,0 +1,234 @@
+"""
+run_scratch_comparator.py — A3 scratch comparator loop (Phase 1, Gate 1B).
+
+36 runs: 3 training seeds {0,1,2} × n∈{40,200,400,4000} × lr∈{1e-3,3e-4,1e-4}
+Each run: identical ViT-Tiny end-to-end from random init, 200 epochs, cosine+warmup.
+batch_size = min(256, n).
+
+Results written to reports/scratch_manifest.json (idempotent — existing runs skipped).
+Checkpoints saved to runs/scratch/s{seed}_n{n}_lr{lr}/.
+
+Formal-val selection: best-lr checkpoint per (training_seed, n) cell is chosen by
+val accuracy on the locked val split (data/splits/stl10_val_idx.json, 1000 images).
+
+Usage:
+    caffeinate -is uv run python scripts/run_scratch_comparator.py
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import math
+import sys
+import time
+from pathlib import Path
+
+import torch
+import torch.nn.functional as F
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.data.stl10 import get_val_loader, get_probe_train_loader
+from src.eval.probe import ScratchClassifier, _eval_loader_acc, get_probe_pool, stratified_sample
+
+DATA_DIR    = Path(__file__).parent.parent / "data"
+REPORTS_DIR = Path(__file__).parent.parent / "reports"
+CKPT_ROOT   = Path(__file__).parent.parent / "runs" / "scratch"
+MANIFEST    = REPORTS_DIR / "scratch_manifest.json"
+
+TRAINING_SEEDS = [0, 1, 2]
+N_VALUES       = [40, 200, 400, 4000]
+LR_LIST        = [1e-3, 3e-4, 1e-4]
+EPOCHS         = 200
+WEIGHT_DECAY   = 0.05
+WARMUP_EPOCHS  = 10
+
+
+def _run_key(seed: int, n: int, lr: float) -> str:
+    return f"s{seed}_n{n}_lr{lr:.0e}"
+
+
+def _load_manifest() -> dict:
+    if MANIFEST.exists():
+        with open(MANIFEST) as f:
+            return json.load(f)
+    return {"runs": [], "best_per_cell": {}}
+
+
+def _save_manifest(m: dict) -> None:
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(MANIFEST, "w") as f:
+        json.dump(m, f, indent=2)
+
+
+def _train_one(
+    training_seed: int,
+    n: int,
+    lr: float,
+    val_loader: torch.utils.data.DataLoader,
+    device: str,
+) -> tuple[float, str]:
+    """Train one (seed, n, lr) run. Returns (best_val_acc, ckpt_path)."""
+    probe_indices, probe_labels = get_probe_pool(DATA_DIR)
+    sel_indices = stratified_sample(probe_indices, probe_labels, n_per_class=n // 10)
+
+    from torch.utils.data import DataLoader, Subset
+    import torchvision.transforms as T
+    from torchvision.datasets import STL10
+
+    tfm = T.Compose([
+        T.Resize(96, interpolation=T.InterpolationMode.BICUBIC),
+        T.CenterCrop(96),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    ds    = STL10(root=str(DATA_DIR), split="train", transform=tfm, download=False)
+    batch = min(256, n)
+    train_loader = DataLoader(
+        Subset(ds, sel_indices), batch_size=batch,
+        shuffle=True, num_workers=0, drop_last=False,
+    )
+
+    torch.manual_seed(training_seed)
+    model = ScratchClassifier().to(device)
+    opt   = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
+
+    n_batches    = max(1, len(train_loader))
+    total_steps  = EPOCHS * n_batches
+    warmup_steps = WARMUP_EPOCHS * n_batches
+
+    def _sched(step: int) -> float:
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        prog = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * min(1.0, prog)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, _sched)
+
+    best_acc  = -1.0
+    best_state: dict | None = None
+    step = 0
+
+    for ep in range(EPOCHS):
+        model.train()
+        for batch_data in train_loader:
+            imgs   = batch_data[0].to(device)
+            labels = batch_data[1].to(device)
+            loss   = F.cross_entropy(model(imgs), labels)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            scheduler.step()
+            step += 1
+
+        acc = _eval_loader_acc(model, val_loader, device)
+        if acc > best_acc:
+            best_acc  = acc
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+
+        if (ep + 1) % 50 == 0 or ep == EPOCHS - 1:
+            print(f"    ep={ep+1:>3}  val={acc:.4f}  best={best_acc:.4f}", flush=True)
+
+    # Save best checkpoint
+    ckpt_dir  = CKPT_ROOT / _run_key(training_seed, n, lr)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = str(ckpt_dir / "best.ckpt")
+    torch.save({"model_state_dict": best_state, "val_acc": best_acc, "lr": lr,
+                "training_seed": training_seed, "n": n, "epochs": EPOCHS}, ckpt_path)
+    return best_acc, ckpt_path
+
+
+def main() -> None:
+    device = "mps" if torch.backends.mps.is_available() else (
+             "cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[scratch] device={device}  seeds={TRAINING_SEEDS}  "
+          f"n={N_VALUES}  lrs={LR_LIST}  epochs={EPOCHS}")
+    print(f"[scratch] manifest={MANIFEST}")
+    print(f"[scratch] total runs={len(TRAINING_SEEDS) * len(N_VALUES) * len(LR_LIST)}")
+
+    val_loader = get_val_loader(DATA_DIR, batch_size=256, num_workers=0)
+    manifest   = _load_manifest()
+    done_keys  = {r["key"] for r in manifest["runs"]}
+
+    t_total = time.time()
+
+    for training_seed in TRAINING_SEEDS:
+        for n in N_VALUES:
+            for lr in LR_LIST:
+                key = _run_key(training_seed, n, lr)
+                if key in done_keys:
+                    print(f"  [SKIP] {key} (already in manifest)")
+                    continue
+
+                print(f"\n  [{key}] training_seed={training_seed} n={n} lr={lr:.0e}", flush=True)
+                t0 = time.time()
+                try:
+                    val_acc, ckpt_path = _train_one(training_seed, n, lr, val_loader, device)
+                    status = "ok"
+                except Exception as exc:
+                    print(f"    ERROR: {exc}")
+                    val_acc, ckpt_path, status = float("nan"), "", f"error: {exc}"
+
+                elapsed = time.time() - t0
+                entry = {
+                    "key": key,
+                    "training_seed": training_seed,
+                    "n": n,
+                    "lr": lr,
+                    "val_acc": round(val_acc, 6),
+                    "epochs": EPOCHS,
+                    "status": status,
+                    "ckpt": ckpt_path,
+                    "wall_s": round(elapsed, 1),
+                }
+                manifest["runs"].append(entry)
+                done_keys.add(key)
+                print(f"    → val_acc={val_acc:.4f}  wall={elapsed:.0f}s  status={status}")
+                _save_manifest(manifest)  # flush after every run
+
+    # Compute best_per_cell (best-lr selection per (training_seed, n))
+    best_per_cell: dict[str, dict] = {}
+    for training_seed in TRAINING_SEEDS:
+        for n in N_VALUES:
+            cell_key = f"s{training_seed}_n{n}"
+            cell_runs = [r for r in manifest["runs"]
+                         if r["training_seed"] == training_seed and r["n"] == n
+                         and r["status"] == "ok"]
+            if not cell_runs:
+                continue
+            best = max(cell_runs, key=lambda r: r["val_acc"])
+            best_per_cell[cell_key] = {
+                "val_acc": best["val_acc"],
+                "best_lr": best["lr"],
+                "ckpt":    best["ckpt"],
+            }
+
+    manifest["best_per_cell"] = best_per_cell
+    _save_manifest(manifest)
+
+    # Summary table
+    total_wall = time.time() - t_total
+    print(f"\n[scratch] total wall: {total_wall:.0f}s ({total_wall/3600:.2f}h)")
+    print(f"\nBest-lr selection per cell (formal-val):")
+    print(f"{'Cell':<14}  {'val_acc':>8}  {'best_lr':>10}")
+    print("-" * 38)
+    for k, v in sorted(best_per_cell.items()):
+        print(f"{k:<14}  {v['val_acc']:>8.4f}  {v['best_lr']:>10.1e}")
+
+    # Cross-seed summary
+    print(f"\nCross-seed means ± σ per n:")
+    print(f"{'n':>6}  {'mean':>8}  {'σ':>6}")
+    print("-" * 26)
+    for n in N_VALUES:
+        accs = [best_per_cell[f"s{s}_n{n}"]["val_acc"]
+                for s in TRAINING_SEEDS
+                if f"s{s}_n{n}" in best_per_cell]
+        if len(accs) < 2:
+            continue
+        mu  = sum(accs) / len(accs)
+        std = (sum((a - mu) ** 2 for a in accs) / (len(accs) - 1)) ** 0.5
+        print(f"{n:>6}  {mu:>8.4f}  {std:>6.4f}")
+
+
+if __name__ == "__main__":
+    main()

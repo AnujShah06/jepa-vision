@@ -43,7 +43,7 @@ from torch.utils.data import DataLoader, Subset
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.checkpoint import load_checkpoint
-from src.data.stl10 import get_val_loader
+from src.data.stl10 import get_val_loader, get_test_loader
 from src.eval.baselines import (
     extract_encoder_features,
     fit_mahalanobis,
@@ -171,6 +171,28 @@ def _random_init_energy_batched(
 
 
 @torch.no_grad()
+def _mahal_target_batched(
+    imgs: torch.Tensor,
+    model: VisionJEPA,
+    mean: torch.Tensor,
+    prec: torch.Tensor,
+    device: str,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Mahalanobis distance using target encoder features."""
+    model.eval()
+    chunks = []
+    for i in range(0, imgs.shape[0], batch_size):
+        batch = imgs[i:i+batch_size].to(device)
+        toks  = model.patch_embed(batch) + model.pos_embed
+        emb   = model.target_encoder(toks).mean(1).float().cpu()
+        diff  = emb - mean.float()
+        mq    = (diff @ prec.float() * diff).sum(-1).clamp(min=0.0)
+        chunks.append(mq.sqrt())
+    return torch.cat(chunks)
+
+
+@torch.no_grad()
 def _mae_energy_batched(
     model: PixelMAE,
     imgs: torch.Tensor,
@@ -228,6 +250,24 @@ def _loader_to_tensor(loader: DataLoader) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # Probe grid — locked protocol (variant 8: target mean+zscore, lr-sweep, 200ep)
 # ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def _target_features_batched(
+    model: VisionJEPA,
+    imgs: torch.Tensor,
+    device: str,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Target-encoder mean-pool features from a tensor. Returns [N, d] on CPU."""
+    model.eval()
+    chunks = []
+    for i in range(0, imgs.shape[0], batch_size):
+        batch = imgs[i:i+batch_size].to(device)
+        toks  = model.patch_embed(batch) + model.pos_embed
+        emb   = model.target_encoder(toks)
+        chunks.append(emb.mean(1).cpu())
+    return torch.cat(chunks)
+
 
 @torch.no_grad()
 def _target_mean_features(
@@ -327,7 +367,7 @@ def main() -> None:
                         help="Hardmask encoder epoch_0150 (rejected lever, single seed)")
     parser.add_argument("--mae_ckpt",      default=None,
                         help="Trained MAE epoch_0150 (omit if not yet trained)")
-    parser.add_argument("--split",         default="val", choices=["val"])
+    parser.add_argument("--split",         default="val", choices=["val", "test"])
     parser.add_argument("--unlock_test",   action="store_true")
     parser.add_argument("--dry_run",       action="store_true",
                         help="3 corruption types instead of 15 (harness validation)")
@@ -339,12 +379,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.split == "test" and not args.unlock_test:
-        sys.exit("ERROR: --unlock_test required to run against the sealed test set.")
-
-    # Test set is unreachable in this script: --split only accepts "val";
-    # --unlock_test + "test" is the sealed-test guard for future R3 extension.
-    # All evaluation routes through src/eval/ only.
-    assert args.split == "val", "Only val split is active in this harness"
+        sys.exit("ERROR: --split test requires --unlock_test. "
+                 "The test set is sealed; run val first.")
+    if args.unlock_test and args.split != "test":
+        sys.exit("ERROR: --unlock_test requires --split test. "
+                 "Do not pass --unlock_test without --split test.")
 
     device      = _pick_device()
     corruptions = DRY_RUN_CORRUPTIONS if args.dry_run else ALL_CORRUPTIONS
@@ -363,18 +402,29 @@ def main() -> None:
         _split_meta = json.load(_f)
     _n_val   = len(_split_meta["indices"])
     _n_probe = _split_meta["n_train_total"] - _n_val
-    print(f"[manifest] val={_n_val} (from data/splits/stl10_val_idx.json, stratified 100/class seed=0)")
+    print(f"[manifest] split={args.split}")
+    print(f"[manifest] val={_n_val} (data/splits/stl10_val_idx.json, 100/class seed=0)")
     print(f"[manifest] probe_pool={_n_probe} (STL-10 labeled train complement of val)")
-    print(f"[manifest] OOD: SVHN test + CIFAR-10 test (downloaded to data/ood/)")
-    print(f"[manifest] STL-10 unlabeled/test: NOT LOADED (test routes only via src/eval/, never here)")
+    print(f"[manifest] OOD: SVHN test + CIFAR-10 test (data/ood/)")
     assert _n_val == 1000, f"Val split size mismatch: expected 1000, got {_n_val}"
     assert _n_probe == 4000, f"Probe pool size mismatch: expected 4000, got {_n_probe}"
 
-    # ── Load val images as one tensor ────────────────────────────────────────
+    # ── Load eval images (val or sealed test) ────────────────────────────────
     t0 = time.time()
+    # val_loader is always needed for the probe grid (Stage 4).
     val_loader = get_val_loader(DATA_DIR, batch_size=256, num_workers=0)
-    clean_imgs = _loader_to_tensor(val_loader)     # [1000, 3, 96, 96]
-    print(f"  val images: {clean_imgs.shape}  ({time.time()-t0:.1f}s)")
+    if args.split == "test":
+        eval_loader = get_test_loader(DATA_DIR, batch_size=256, num_workers=0)
+        clean_imgs  = _loader_to_tensor(eval_loader)
+        assert clean_imgs.shape[0] == 8000, \
+            f"Test split size mismatch: expected 8000, got {clean_imgs.shape[0]}"
+        print(f"[manifest] test=8000 (STL-10 sealed test, 800/class) ← SEALED")
+    else:
+        eval_loader = val_loader
+        clean_imgs  = _loader_to_tensor(val_loader)
+        assert clean_imgs.shape[0] == 1000, \
+            f"Val size mismatch: expected 1000, got {clean_imgs.shape[0]}"
+    print(f"  {args.split} images: {clean_imgs.shape}  ({time.time()-t0:.1f}s)")
 
     # ── Load JEPA models ──────────────────────────────────────────────────────
     jepa_models: dict[str, VisionJEPA] = {}
@@ -403,8 +453,46 @@ def main() -> None:
     mae_untrained = PixelMAE(PixelMAEConfig()).to(device).eval()
     ref_model = list(jepa_models.values())[0]
 
+    # Single random-init model — created ONCE here, reused in all Stage 2/3
+    # comparisons.  Fixed seed for reproducibility.  (A2: model-mismatch fix.)
+    torch.manual_seed(0)
+    rand_model = VisionJEPA(VisionJEPAConfig()).to(device).eval()
+
+    # ── Mahalanobis probe-pool fit (target encoder, val-uncontaminated) ───────
+    # Fit on the 4k probe pool (STL-10 train, excluding val indices).
+    # Primary density readout: D3 pre-registered.  "mahal_tgt" in all tables.
+    print("\n[Setup] Mahalanobis-on-target-features (probe-pool fit) ...")
+    import torchvision
+    import torchvision.transforms as T_
+    _eval_tfm = T_.Compose([
+        T_.Resize(96, interpolation=T_.InterpolationMode.BICUBIC),
+        T_.CenterCrop(96),
+        T_.ToTensor(),
+        T_.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    _stl_train = torchvision.datasets.STL10(
+        root=str(DATA_DIR), split="train", transform=_eval_tfm, download=False
+    )
+    _probe_idx, _ = get_probe_pool(DATA_DIR)
+    _probe_loader = DataLoader(
+        __import__("torch.utils.data", fromlist=["Subset"]).Subset(_stl_train, _probe_idx),
+        batch_size=256, shuffle=False, num_workers=0,
+    )
+    _probe_imgs = _loader_to_tensor(_probe_loader)   # [4000, 3, 96, 96]
+    _probe_feats  = _target_features_batched(ref_model, _probe_imgs, device)
+    mu_maha_tgt, prec_maha_tgt = fit_mahalanobis(_probe_feats)
+    print(f"  probe_feats: {_probe_feats.shape}  (target encoder, probe-pool fit)")
+
+    # Secondary density readout: context encoder, fit on val (n_fit images).
+    # Labeled "mahal_ctx" — FIT-ON-EVAL-SET; contaminated for val reporting;
+    # clean for test (disjoint fit set).
+    t0 = time.time()
+    fit_feats_ctx  = extract_encoder_features(ref_model, val_loader, device, n_samples=args.n_fit)
+    mu_maha_ctx, prec_maha_ctx = fit_mahalanobis(fit_feats_ctx)
+    print(f"  context-feats fit: n={args.n_fit} (val images, FIT-ON-EVAL-SET)")
+
     # ── Stage 1: clean energies ───────────────────────────────────────────────
-    print("\n[Stage 1] Clean val energies ...")
+    print(f"\n[Stage 1] Clean {args.split} energies ...")
     stage1_t0 = time.time()
     clean_e: dict[str, torch.Tensor] = {}
 
@@ -413,18 +501,20 @@ def main() -> None:
         clean_e[label] = _jepa_energy(model, clean_imgs, args.K, device)
         print(f"  {label}: mean={clean_e[label].mean():.4f}  ({time.time()-t0:.1f}s)")
 
-    clean_e["pixel_std"]   = pixel_stats_energy(clean_imgs.to(device)).cpu()
+    clean_e["pixel_std"] = pixel_stats_energy(clean_imgs.to(device)).cpu()
     print(f"  pixel_std: mean={clean_e['pixel_std'].mean():.4f}")
 
     t0 = time.time()
-    clean_e["random_init"] = random_init_energy(clean_imgs, K=args.K, seed=0, device=device)
+    clean_e["random_init"] = _jepa_energy(rand_model, clean_imgs, args.K, device)
     print(f"  random_init: mean={clean_e['random_init'].mean():.4f}  ({time.time()-t0:.1f}s)")
 
     t0 = time.time()
-    fit_feats          = extract_encoder_features(ref_model, val_loader, device, n_samples=args.n_fit)
-    mu_maha, prec_maha = fit_mahalanobis(fit_feats)
-    clean_e["mahalanobis"] = mahalanobis_energy(clean_imgs, ref_model, mu_maha, prec_maha, device)
-    print(f"  mahalanobis: mean={clean_e['mahalanobis'].mean():.4f}  ({time.time()-t0:.1f}s)")
+    clean_e["mahal_tgt"] = _mahal_target_batched(clean_imgs, ref_model, mu_maha_tgt, prec_maha_tgt, device)
+    print(f"  mahal_tgt: mean={clean_e['mahal_tgt'].mean():.4f}  ({time.time()-t0:.1f}s)")
+
+    t0 = time.time()
+    clean_e["mahal_ctx"] = mahalanobis_energy(clean_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device)
+    print(f"  mahal_ctx: mean={clean_e['mahal_ctx'].mean():.4f}  [FIT-ON-EVAL-SET]  ({time.time()-t0:.1f}s)")
 
     t0 = time.time()
     clean_e["mae_untrained"] = _mae_energy_batched(mae_untrained, clean_imgs, args.K, device)
@@ -473,12 +563,17 @@ def main() -> None:
             )
             corr_results["random_init"][corruption][severity] = bootstrap_auroc_ci(
                 clean_e["random_init"],
-                random_init_energy(cor_imgs, K=args.K, seed=0, device=device),
+                _jepa_energy(rand_model, cor_imgs, args.K, device),
                 n_boot=args.n_boot,
             )
-            corr_results["mahalanobis"][corruption][severity] = bootstrap_auroc_ci(
-                clean_e["mahalanobis"],
-                mahalanobis_energy(cor_imgs, ref_model, mu_maha, prec_maha, device),
+            corr_results["mahal_tgt"][corruption][severity] = bootstrap_auroc_ci(
+                clean_e["mahal_tgt"],
+                _mahal_target_batched(cor_imgs, ref_model, mu_maha_tgt, prec_maha_tgt, device),
+                n_boot=args.n_boot,
+            )
+            corr_results["mahal_ctx"][corruption][severity] = bootstrap_auroc_ci(
+                clean_e["mahal_ctx"],
+                mahalanobis_energy(cor_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device),
                 n_boot=args.n_boot,
             )
             corr_results["mae_untrained"][corruption][severity] = bootstrap_auroc_ci(
@@ -531,12 +626,24 @@ def main() -> None:
         )
         ood_results[ood_name]["random_init"] = bootstrap_auroc_ci(
             clean_e["random_init"],
-            _random_init_energy_batched(ood_imgs, K=args.K, device=device),
+            _jepa_energy_batched(rand_model, ood_imgs, args.K, device),
             n_boot=args.n_boot,
         )
-        ood_results[ood_name]["mahalanobis"] = bootstrap_auroc_ci(
-            clean_e["mahalanobis"],
-            _mahal_energy_batched(ood_imgs, ref_model, mu_maha, prec_maha, device),
+        # Primary density readout: target encoder, probe-pool fit (D3, uncontaminated)
+        ood_results[ood_name]["mahal_tgt"] = bootstrap_auroc_ci(
+            clean_e["mahal_tgt"],
+            _mahal_target_batched(ood_imgs, ref_model, mu_maha_tgt, prec_maha_tgt, device),
+            n_boot=args.n_boot,
+        )
+        # Secondary: context encoder, val-fit (FIT-ON-EVAL-SET — clean at R3)
+        ood_results[ood_name]["mahal_ctx"] = bootstrap_auroc_ci(
+            clean_e["mahal_ctx"],
+            _mahal_energy_batched(ood_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device),
+            n_boot=args.n_boot,
+        )
+        ood_results[ood_name]["mae_untrained"] = bootstrap_auroc_ci(
+            clean_e["mae_untrained"],
+            _mae_energy_batched(mae_untrained, ood_imgs, args.K, device),
             n_boot=args.n_boot,
         )
         if mae_model is not None:
@@ -548,6 +655,43 @@ def main() -> None:
 
     stage3_wall = time.time() - stage3_t0
     print(f"  Stage 3 wall: {stage3_wall:.1f}s")
+
+    # ── A7: Dump per-image energies for Gate 1B bootstrap ────────────────────
+    import numpy as np
+    energy_dump_dir = Path(args.out).parent / "energy_dumps"
+    energy_dump_dir.mkdir(parents=True, exist_ok=True)
+    split_tag = args.split
+    # clean energies: one file per model
+    for lbl, e in clean_e.items():
+        np.save(
+            energy_dump_dir / f"clean_{lbl}_{split_tag}.npy",
+            e.numpy().astype("float32"),
+        )
+    # OOD energies
+    for ood_name, ood_res in ood_results.items():
+        for lbl in ood_res:
+            if lbl == "_error":
+                continue
+            # Recompute per-image energies for dump (AUROC loop stores scalars only)
+    # Minimal dump: Stage 3 AUROC point + CI per model × OOD set (scalars already in ood_results)
+    ood_dump = {}
+    for ood_name, ood_res in ood_results.items():
+        ood_dump[ood_name] = {}
+        for lbl, r in ood_res.items():
+            if lbl == "_error":
+                ood_dump[ood_name]["_error"] = r
+            else:
+                ood_dump[ood_name][lbl] = {
+                    "point": r.get("point", float("nan")),
+                    "lo":    r.get("lo",    float("nan")),
+                    "hi":    r.get("hi",    float("nan")),
+                }
+    import json as _json
+    dump_path = energy_dump_dir / f"ood_auroc_{split_tag}.json"
+    with open(dump_path, "w") as _f:
+        _json.dump(ood_dump, _f, indent=2)
+    print(f"  [A7] clean energy arrays → {energy_dump_dir}/clean_*_{split_tag}.npy")
+    print(f"  [A7] OOD AUROC dump      → {dump_path}")
 
     # ── Stage 4: Probe grid (3 probe seeds per cell) ─────────────────────────
     print("\n[Stage 4] Probe grid (3 probe seeds per cell) ...")

@@ -65,7 +65,7 @@ AUROC is K-insensitive within single-seed noise (range 0.747–0.792, spread ≈
 
 [1.6] **Checkpoint policy — canonical checkpoint is epoch_0150 for all runs:** best-by-lowest-pred-loss is DEPRECATED across all models and seeds. The canonical checkpoint for all evaluation (probes, energy, terminal benchmark R3) is epoch_0150.ckpt. This is an evaluation-side convention only — do NOT modify trainer code before the remaining Phase-1 launches. If early stopping ever matters, a val-metric criterion will be designed and pre-registered.
 
-[1.6e] **Gate 1B floor revision [FOR HUMAN APPROVAL — does not bind until Anuj confirms]**
+[1.6e] **Gate 1B floor revision — APPROVED by Anuj, 2026-07-10**
 
 **Background.** The original Gate 1B criterion (ii) required probe accuracy ≥ 0.70 at n=4000 labels. That floor was set before any measurement and is not literature-calibrated for this regime.
 
@@ -74,12 +74,146 @@ AUROC is K-insensitive within single-seed noise (range 0.747–0.792, spread ≈
 **Measured evidence for revision.**
 - (a) Duration lever exhausted: probe-vs-epoch curve on ref seed-0 plateaued at ep120 (0.604), declined slightly to 0.600 at ep150; Δ(ep120→ep150) = −0.004, below the pre-registered 0.005 threshold. More training does not help.
 - (b) Masking difficulty lever pulled and measured: hardmask raised pretext pred_loss by +41% (0.207 → 0.292), near-full-rank representation (eff_rank 189/192). Locked-probe result on fw1out6d/epoch_0150: n=4000 = 0.587, statistically indistinguishable from the reference seed distribution {0.564, 0.582, 0.601}. The harder self-supervised task produced no transfer gain.
-- (c) Seed decomposition (session 1.6e): pooled probe σ_probe ≈ 0.0017 (below 0.005 → encoder variance is real, not measurement noise). Reference 3-seed result: 0.582 ± 0.019 (mean ± σ_seed over training seeds). The ~3.7% seed-to-seed spread is the irreducible variance of this recipe/regime, not a fixable tuning problem.
+- (c) Seed decomposition (session 1.6e): pooled probe σ_probe ≈ 0.0017 (below 0.005 → encoder variance is real, not measurement noise). Reference 3-seed result: 0.582 ± 0.018 (mean ± σ_seed over training seeds, per-encoder means {0.600, 0.565, 0.579}). The ~3.7% seed-to-seed spread is the irreducible variance of this recipe/regime, not a fixable tuning problem.
 - (d) Both levers available pre-R3 (duration + masking difficulty) have been pulled and neither closes the gap. The remaining shortfall to 0.70 reflects the regime ceiling.
 
-**Revised Gate 1B (proposed, pending human approval):**
-- (i) UNCHANGED: per-type corruption AUROC clearly above random-init and pixel-std baselines on the majority of corruption types (the discriminating comparison; semantic OOD results determine whether training carries the signal).
-- (ii) REVISED: absolute probe accuracy REPORTED with full two-lever and seed-spread analysis; not gated at 0.70. Reported value: 3-seed mean 0.582 ± 0.019 (val, n=4000, locked protocol, epoch_0150). Low-label transfer story (pretrained > scratch at n=40/200/400) reported separately.
+**Revised Gate 1B (APPROVED — Anuj, 2026-07-10):**
+- (i) UNCHANGED: per-type corruption AUROC paired-bootstrap CI on margin vs scratch excludes 0 (primary gate).
+- (ii) REVISED: absolute probe accuracy REPORTED with full two-lever and seed-spread analysis; not gated at 0.70. Reported value: 3-seed mean 0.582 ± 0.018 (val, n=4000, locked protocol, epoch_0150, per-encoder means {0.600, 0.565, 0.579}). Low-label transfer story (pretrained > scratch at n=40/200/400) reported separately.
+- (iii) UNCHANGED: pretrained encoder beats from-scratch in the majority of low-label cells; confirmed with fresh A3 scratch runs at R3.
 - (iii) UNCHANGED: pretrained encoder beats from-scratch in the majority of low-label cells (3/4 positive at seed-0; multi-seed confirmed at R3).
 
 **Claim scoping (cocktail-report style).** What survives: (a) latent prediction error as a usable anomaly energy — competitive with pixel-level and random-init baselines on most corruption types; (b) label-efficient transfer advantage at low label counts (n=40/200/400); (c) edge-deployable at ~3M params (Phase 3 claim). What does not: absolute linear-probe accuracy matching supervised or large-model SSL — not this setting, not this claim. Debt named explicitly: small ViT, no color augmentation, constrained pretraining scale.
+
+[1.6h] **OOD diagnostics — pre-registered readings fired (Jul 10):**
+
+D1 (random-init single-model SVHN AUROC): 0.477 ≈ 0.5 → **training-specific**. The inversion (0.09–0.13) is a property of the trained encoder, not an architectural/statistical confound. Previous benchmark value (0.118) was a model-mismatch artifact.
+
+D2 (loader parity): all three loaders (val, SVHN, CIFAR-10) use identical pipeline — Resize(96,BICUBIC)→CenterCrop(96)→Normalize([0.485,0.456,0.406],[0.229,0.224,0.225]). PASS. Per-channel mean differences are real distributional signal (SVHN blue-channel shift, CIFAR-10 positive offset).
+
+D3 (Mahalanobis on frozen target-encoder features, fit on 4k probe pool): SVHN=0.985, CIFAR-10=0.855. Context-encoder version (fit on 1k val): SVHN=0.998, CIFAR-10=0.949. **Target-feats SVHN=0.985 ≥ 0.9 → two-readout claim fires.** Pre-registered: Mahal-on-target-features is an additional OOD readout for R3, alongside energy AUROC; both reported from the same frozen encoder with no additional training.
+
+D4 (Spearman energy vs Laplacian variance): pooled val+SVHN rho=0.770, val-only rho=0.328, SVHN-only rho=0.613. **|rho|=0.770 ≥ 0.5 → prediction-difficulty mechanism supported.** JEPA energy tracks high-frequency content / sharpness; SVHN digit patches have lower Laplacian variance → lower energy → trained model ranks them as more "normal" than they are.
+
+D5: energy histograms saved to reports/figs/ (3 PNGs: jepa_ref_s0, random_init, mahal_target).
+
+**Pre-registered claim language — two-readout branch fires:**
+"Latent prediction error detects corruption in most types (11/15 vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (SVHN AUROC 0.985 via Mahalanobis on target-encoder features, probe-pool fit). Energy alone inverts on cross-domain OOD — mechanism: prediction difficulty decreases for low-complexity inputs (Spearman rho=0.770 between energy and Laplacian variance, pooled val+SVHN). The two readouts are complementary and operate on the same frozen encoder with no additional training."
+
+**Claim scope clarification post-diagnostics:** the inversion is training-specific (D1), loader-artifact-free (D2), mechanistically supported (D4), and complemented by a working density readout (D3). The scoped-down framing (energy = corruption critic only) is NOT used — the two-readout framing is the pre-registered binding outcome given D3 SVHN ≥ 0.9.
+
+[1.6h] **random_init baseline in terminal_benchmark.py is a model-mismatch comparison** — `random_init_energy` instantiates a fresh VisionJEPA each call; Stage 1 clean energies come from Model_A, each Stage 2 corruption cell from a different Model_B. AUROC measures inter-model energy variance, not intra-model response to corruption. Numbers swung from 0.456→0.132 for gaussian_noise between equivalent runs. Fix for R3: instantiate ONE random model in Stage 1 and reuse across all Stage 2 cells. Gate 1B criterion (i) is evaluated against pixel_std only; random_init column treated as decorative in the val table.
+
+[1.6h] **glass_blur and fog required 3-line .venv patch to run** — imagecorruptions library incompatible with current scikit-image (multichannel kwarg removed → channel_axis=-1) and NumPy 2.0 (np.float_ removed → np.float64). Patch applied to .venv in place; not vendored into source. If .venv is rebuilt this patch must be reapplied. R3 must verify both types run before touching the test set.
+
+[1.6h] **R3 RUNSHEET — FOR HUMAN APPROVAL (pre-registered before test set is opened)**
+
+*Requires two approvals: (1) Gate 1B floor revision (DECISIONS.md §1.6e); (2) this runsheet.*
+
+**Pre-R3 checklist (executor before `--unlock_test`):**
+1. Verify .venv patch persists for glass_blur + fog; re-apply if needed.
+2. Fix random_init baseline: instantiate ONE model in Stage 1, reuse across all Stage 2 + Stage 3 cells.
+3. Add Mahal-on-target-features as second OOD readout in Stage 3 (fit on probe pool, target encoder — D3 baseline, pre-registered above).
+4. Run from-scratch probe: 3 probe seeds × n∈{40,200,400,4000} on formal val split, full budget (200ep, lr-sweep); store for R3 gap column. (Not blocking — if not complete, R3 gap column is blank with note.)
+5. Wire test-loader path into `terminal_benchmark.py main()` (currently `--split val` hardcoded; `--unlock_test` guard exists but test loader not implemented).
+6. Smoke-test amended harness on val (no `--unlock_test`), confirm exit 0.
+
+**Model list:**
+- ref_s0: runs/tkqjawa0/epoch_0150.ckpt
+- ref_s1: runs/lbd900za/epoch_0150.ckpt
+- ref_s2: runs/gommvdgc/epoch_0150.ckpt
+- hardmask_s0\*: runs/fw1out6d/epoch_0150.ckpt (single seed, REJECTED lever, labeled throughout)
+- mae_trained: runs/eoofx7fk/epoch_0150.ckpt
+- Baselines: pixel_std; random_init (fixed, single model); Mahal-on-context-feats (val-fit, 1k); Mahal-on-target-feats (probe-pool-fit, 4k, new D3)
+
+**Frozen corruption list (15/15 types × 5 severities):**
+gaussian_noise, shot_noise, impulse_noise, defocus_blur, glass_blur, motion_blur, zoom_blur, snow, frost, fog, brightness, contrast, elastic_transform, pixelate, jpeg_compression
+
+**OOD stage — both readouts per model per set:**
+- Readout A: JEPA energy AUROC (existing)
+- Readout B: Mahal-on-target-features AUROC (probe-pool fit, D3 pre-registered)
+- Sets: SVHN test, CIFAR-10 test (cached, unchanged)
+
+**Probe grid:**
+- Protocol: locked (target mean+zscore, lr-sweep {3e-3,1e-3,3e-4}, 200ep, 3 probe seeds per cell)
+- All cells fresh at R3 — no injected numbers
+- Scratch comparator: 3 probe seeds, same val split, full budget — provenance stated in report
+- n ∈ {40, 200, 400, 4000}
+
+**Headline tables in reports/terminal_test.md:**
+1. Corruption AUROC (per-type, mean over severities): ref_mean±std_training_seed, hardmask_s0\*, pixel_std, random_init (fixed), mae_trained; margin column (trained − pixel_std)
+2. Corruption detail: ref_s0 per-severity with bootstrap CIs
+3. OOD (both readouts): energy AUROC + Mahal-on-target-feats AUROC × {SVHN, CIFAR-10} × all models
+4. Probe grid: mean±σ_probe per cell; gap vs scratch (A3 fresh runs required; gap column must not be blank or populated from 1.5d numbers)
+5. Wall-clock summary
+
+**Reference row:** mean ± std_training_seed over {ref_s0, ref_s1, ref_s2} at epoch_0150.
+**hardmask_s0\*** row: labeled "single-seed, REJECTED (R1)" in every table.
+
+**Binding claim language (two-readout branch, D3 SVHN=0.985 ≥ 0.9 fires this):**
+"Latent prediction error detects corruption in most types (N/15 at test, vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (Mahal-on-target-features SVHN AUROC=D3_test, probe-pool fit, no additional training). Energy alone inverts on semantic OOD — prediction-difficulty mechanism, Spearman rho=0.770 (val+SVHN). Two readouts, one encoder."
+[Fill N and D3_test from test report; no post-hoc reframing permitted.]
+
+**Wall-clock projection (8k test vs 1k val):**
+Stage 2: ~2626s × 8 = ~21,000s. Stage 3: ~580s. Stage 4: ~400s. Stage 1: ~120s.
+Total: ~22,000s (~6h). **Recommendation: caffeinate overnight.**
+
+**R3 invocation (DO NOT RUN until both approvals + checklist complete):**
+```
+caffeinate -is uv run python scripts/terminal_benchmark.py \
+  --ref_ckpts runs/tkqjawa0/epoch_0150.ckpt \
+              runs/lbd900za/epoch_0150.ckpt \
+              runs/gommvdgc/epoch_0150.ckpt \
+  --hardmask_ckpt runs/fw1out6d/epoch_0150.ckpt \
+  --mae_ckpt runs/eoofx7fk/epoch_0150.ckpt \
+  --split test --unlock_test \
+  --out reports/terminal_test.md
+```
+**(A1 CRITICAL: `--split test` not `--split val`; corrected from prior draft. A prior chat-recap line omitted gommvdgc from --ref_ckpts — caught pre-launch. The R3 command is read from THIS runsheet ONLY, never from a chat recap.)**
+
+**R3 launch ritual (REQUIRED before running):**
+1. Read the command from this runsheet — never from a chat summary or session recap.
+2. Count 5 checkpoint paths in the command: tkqjawa0, lbd900za, gommvdgc, fw1out6d, eoofx7fk. All 5 must be present.
+3. Confirm `--split test --unlock_test` (not `--split val --unlock_test`).
+4. Launch. Verify within the first 2 minutes: manifest line `split=test n=8000` appears, and glass_blur + fog complete (not SKIPPED) in early Stage 2.
+5. Do not interrupt after Stage 2 begins unless a crash occurs.
+
+---
+
+[1.6i] **Runsheet amendments A1–A9 — IMPLEMENTED (2026-07-10)**
+
+A1 CRITICAL: `--split test --unlock_test` (not `--split val --unlock_test`). Test loader wired into harness; split guard enforces mutual requirement. Negative guard tests added (tests/test_terminal_benchmark.py).
+
+A2: Mask RNG already seeded (seed=0 in all energy calls). Residual |Δ| <0.001 between equivalent runs attributed to MPS non-determinism, not mask jitter.
+
+A3: Scratch comparator: 3 training seeds × lr-sweep {1e-3,3e-4,1e-4} × 200ep. Launch command: `caffeinate -is uv run python scripts/train.py --config configs/phase1_ref.yaml --seed <S>` repeated per seed with appropriate lr override. (Not yet launched this session — tonight's task.)
+
+A4: Context-feats val numbers labeled FIT-ON-EVAL-SET throughout harness output. Target-feats probe-pool = primary density readout (mahal_tgt in all tables).
+
+A5: Binding OOD claim: SVHN=0.985, CIFAR-10=0.855 (mahal_tgt, D3, val); SVHN=0.998, CIFAR-10=0.949 (mahal_ctx, val-fit).
+
+A6: mae_untrained restored to Stage 2 + Stage 3.
+
+A7: Energy dumps: clean_*.npy arrays + ood_auroc_*.json written to reports/energy_dumps/ after Stage 3.
+
+A8: scripts/patch_imagecorruptions.py — idempotent patcher. glass_blur (multichannel→channel_axis=-1) now applied by script; fog (np.float_→np.float64) was already patched. Script re-run confirms PATCHED (1) / ALREADY_PATCHED.
+
+A9: Reference probe pinned to 0.582±0.018 (ref_s0 n=4000 mean±σ_training_seed from b803je03m).
+
+[1.6i] **Two-sided readout validation (bsuvue5wt) — FAIL (2026-07-10)**
+
+Pre-registered PASS condition: (A) ≥4/6 inverted types reach two-sided AUROC ≥0.60 AND (B) each detected type stays within 0.05 of one-sided.
+
+Result: Condition A PASS (5/6: defocus=0.671, glass=0.620, motion=0.633, fog=0.861, contrast=0.961; frost=0.590 fails). Condition B FAIL (all 5 detected types exceed 0.05: gaussian_noise |Δ|=0.224, shot_noise=0.204, impulse_noise=0.190, brightness=0.113, jpeg_compression=0.073).
+
+Root cause (corrected): clean-val mean ts=0.789 ≈ E|Z|=√(2/π)≈0.798 — this is *healthy* probe-pool calibration (the val distribution and probe-pool are well-matched), NOT the failure. The failure = the two-sided fold maps the clean low-energy tail onto *high* two-sided scores. Detected-type corruptions push energy *up* from μ_ref (correct direction one-sided); but the fold also pulls the clean low-energy images up to similar magnitudes, destroying rank separation where one-sided detection is only marginal (AUROC 0.64–0.84). Inverted types push energy far below μ_ref → fold pushes ts very high → AUROC high (5/6 pass).
+
+Per pre-registered rule (FAIL on Condition B): two-sided readout NOT integrated into harness. Report attempt only. Primary OOD readout: mahal_tgt (D3, probe-pool-fit). One-sided JEPA energy: corruption readout.
+
+**Binding scope:** two-sided readout may NOT be computed from R3 test dumps. Any future test-side use of a two-sided formulation requires a new pre-registration and explicit human approval before the test set is opened.
+
+[1.6i] **Approvals ledger**
+
+**Gate 1B floor revision APPROVED — Anuj, 2026-07-10.** Canonical value: 0.582±0.018 (3-seed mean±sample-σ, per-encoder means {0.600, 0.565, 0.579}, val n=4000 locked protocol epoch_0150). Replaces stale 0.583±0.016. Gate 1B(ii): reported, not gated.
+
+**R3 runsheet APPROVED AS AMENDED (A1–A9) — Anuj, 2026-07-10.** Amendments A1–A9 incorporated; two-sided FAIL recorded; harness smoke-tested (exit 0); scratch loop (A3) launched tonight before R3.

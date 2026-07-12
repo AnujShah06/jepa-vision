@@ -87,3 +87,59 @@ def bootstrap_auroc_ci(
         "mean": float(stats.mean()),
         "std": float(stats.std()),
     }
+
+
+def paired_margin_auroc_ci(
+    real: torch.Tensor,
+    jepa_ood: torch.Tensor,
+    scratch_ood: torch.Tensor,
+    n_boot: int = 10_000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> dict:
+    """
+    Paired-bootstrap 95% CI on the AUROC margin (JEPA − scratch) for Gate 1B(i).
+
+    Bootstrap resamples clean + OOD jointly (paired), computes AUROC for both
+    JEPA and scratch from the SAME resample, then takes the difference.  This
+    preserves the pairing between clean and OOD indices so the CI reflects
+    evaluation-set variability, not label noise.
+
+    Returns {jepa_pt, scratch_pt, margin_pt, lo, hi, pass_gate}: where
+      pass_gate = True iff the 95% CI of the margin excludes 0 (lo > 0).
+
+    real        : clean in-distribution energies (JEPA and scratch share the same
+                  clean reference because we compare the same clean set).
+    jepa_ood    : OOD energies under the trained JEPA model.
+    scratch_ood : OOD energies under the scratch (random-init or untrained) model.
+    """
+    g = torch.Generator().manual_seed(seed)
+    real        = real.flatten()
+    jepa_ood    = jepa_ood.flatten()
+    scratch_ood = scratch_ood.flatten()
+    n_r  = real.numel()
+    n_oo = jepa_ood.numel()
+    assert jepa_ood.shape == scratch_ood.shape, "jepa_ood and scratch_ood must be the same size"
+
+    jepa_pt    = auroc(real, jepa_ood)
+    scratch_pt = auroc(real, scratch_ood)
+    margin_pt  = jepa_pt - scratch_pt
+
+    margins = torch.empty(n_boot)
+    for b in range(n_boot):
+        ri  = torch.randint(0, n_r,  (n_r,),  generator=g)
+        oi  = torch.randint(0, n_oo, (n_oo,), generator=g)
+        j   = auroc_fast(real[ri], jepa_ood[oi])
+        s   = auroc_fast(real[ri], scratch_ood[oi])
+        margins[b] = j - s
+
+    lo = torch.quantile(margins, alpha / 2).item()
+    hi = torch.quantile(margins, 1 - alpha / 2).item()
+    return {
+        "jepa_pt":    jepa_pt,
+        "scratch_pt": scratch_pt,
+        "margin_pt":  margin_pt,
+        "lo":         lo,
+        "hi":         hi,
+        "pass_gate":  lo > 0,
+    }

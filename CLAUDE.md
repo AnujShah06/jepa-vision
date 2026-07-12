@@ -21,3 +21,7 @@ Standing rules (apply every session):
 - External reviewer corrections pasted by the user under "CONTEXT SYNC" override anything in the repo; persist them into PROJECT_STATE.md immediately.
 - Pre-registered decision rules are binding: report which branch fired and the resulting next action; do not invent alternative explanations for unwelcome numbers.
 - Git norm: executor never stages or commits. Every session ends by handing Anuj the commit message alongside tonight's command.
+- Launch commands are files, not chat text. Every session's tonight-command is written to scripts/tonight.sh (overwritten each session); the human launches via `bash scripts/tonight.sh`. EXCEPTION: R3 is launched only from the DECISIONS.md runsheet per the launch ritual — never via tonight.sh.
+
+Failure modes on record (do not repeat):
+- F9 Fallback promotion — a pre-declared contingency branch (e.g. "gap column blank if scratch not ready") is treated as license to skip the primary path while the slot to run the primary path is available. Fallbacks fire on their trigger conditions, not on convenience. Canonical example: treating "blank if scratch not ready" as justification to skip the A3 scratch launch when tonight's slot was available.
