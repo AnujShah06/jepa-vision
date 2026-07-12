@@ -12,15 +12,14 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6i COMPLETE** — Pre-R3 code + smoke-test complete (Jul 10). Two-sided validation FAIL (bsuvue5wt) — report attempt only, not integrated. Harness fully amended (A1–A9). Approvals recorded (Gate 1B floor + R3 runsheet). **Ready for R3 tonight after scratch launch.**
+**Step 1.6l COMPLETE** — Scratch loop crash fix (Jul 12). stratified_sample bug fixed, manifest wiped, hardened schema, 113/113 tests pass.
 
-Approvals received from Anuj: Gate 1B floor (0.582±0.018) APPROVED. R3 runsheet APPROVED. Amendments A1–A9 IMPLEMENTED and smoke-tested.
+**Tonight's command:** none — scratch loop relaunches in morning session.
+```
+bash scripts/tonight.sh   # prints "No overnight run..." and exits 0
+```
 
-**Tonight's command (scratch loop — A3):**
-```
-bash scripts/tonight.sh
-```
-~3–4h. Writes reports/scratch_manifest.json. Idempotent — safe to re-run if interrupted.
+**Morning session task:** overwrite tonight.sh with the relaunch command, then run `bash scripts/tonight.sh` (~3–4h daytime).
 
 **Saturday's command (R3 — read from DECISIONS.md runsheet, not from here):**
 See DECISIONS.md §R3 RUNSHEET. Perform the 5-checkpoint count + `--split test` confirmation ritual before launching.
@@ -264,6 +263,26 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 | Then | Write reports/phase1.md from terminal_test.md; Phase 2 kickoff |
 
 **Gate 1B floor**: approved 0.582±0.018 (ref_s0 n=4000, training-seed σ). Gate 1B(i): paired-bootstrap CI on AUROC margin excludes 0. Gate 1B(ii): 0.582±0.018 reported, not gated. Gate 1B(iii): JEPA > scratch at n=40/200/400. See DECISIONS.md.
+
+---
+
+## Step 1.6l — Scratch loop crash fix (2026-07-12)
+
+**Bug:** `stratified_sample(probe_indices, probe_labels, n_per_class=n//10)` passed `probe_labels` as positional arg 2 (which maps to `n_per_class`) then also passed `n_per_class=n//10` by keyword → "multiple values for argument 'n_per_class'". Crashed all 13 runs that ran tonight (wall_s=3.3s each, val_acc=NaN).
+
+**Fix:** `pool_sel = stratified_sample(probe_labels, n_per_class=n//10); sel_indices = [probe_indices[i] for i in pool_sel]`
+
+**Manifest provenance adjudication:**
+- Manifest created: Jul 12 13:15:11 (committed in d3f072e by Anuj as part of "1.6j decision updates")
+- All 13 entries: error status, wall_s=3.3–3.4s — NOT 200-epoch runs. Pre-registered rule fired: all 13 deleted.
+- The "5 completed cells" referenced in CONTEXT SYNC = human misreading `[SKIP]` terminal output against error-keyed entries. No completed runs ever existed in the manifest.
+- Sanctioned smoke cell (s0_n200_lr1e-03, 2 epochs) never written to manifest. No F2 (unreported execution) evidenced.
+
+**Hardened manifest schema (Issue 3):** each entry now records `epochs_completed`, `start_time` (ISO UTC), `end_time` (ISO UTC), `git_sha`. Skip-if-present check requires `status=='ok' AND epochs_completed==200`.
+
+**Tests:** 6 new tests in tests/test_scratch_comparator.py — all 4 n-values through sampling path, regression test for buggy call, _is_complete() logic. 113/113 total pass.
+
+**tonight.sh:** overwritten to print "No overnight run…" and exit 0. Morning session overwrites with relaunch command.
 
 ---
 

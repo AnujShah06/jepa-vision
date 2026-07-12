@@ -5,7 +5,8 @@ run_scratch_comparator.py — A3 scratch comparator loop (Phase 1, Gate 1B).
 Each run: identical ViT-Tiny end-to-end from random init, 200 epochs, cosine+warmup.
 batch_size = min(256, n).
 
-Results written to reports/scratch_manifest.json (idempotent — existing runs skipped).
+Results written to reports/scratch_manifest.json (idempotent — only completed
+200-epoch runs are skipped; error entries are retried).
 Checkpoints saved to runs/scratch/s{seed}_n{n}_lr{lr}/.
 
 Formal-val selection: best-lr checkpoint per (training_seed, n) cell is chosen by
@@ -17,8 +18,10 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import datetime
 import json
 import math
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -28,7 +31,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data.stl10 import get_val_loader, get_probe_train_loader
+from src.data.stl10 import get_val_loader
 from src.eval.probe import ScratchClassifier, _eval_loader_acc, get_probe_pool, stratified_sample
 
 DATA_DIR    = Path(__file__).parent.parent / "data"
@@ -48,6 +51,21 @@ def _run_key(seed: int, n: int, lr: float) -> str:
     return f"s{seed}_n{n}_lr{lr:.0e}"
 
 
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).parent.parent,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
 def _load_manifest() -> dict:
     if MANIFEST.exists():
         with open(MANIFEST) as f:
@@ -61,6 +79,11 @@ def _save_manifest(m: dict) -> None:
         json.dump(m, f, indent=2)
 
 
+def _is_complete(entry: dict) -> bool:
+    """An entry is complete iff status=='ok' AND epochs_completed==200."""
+    return entry.get("status") == "ok" and entry.get("epochs_completed") == EPOCHS
+
+
 def _train_one(
     training_seed: int,
     n: int,
@@ -70,7 +93,10 @@ def _train_one(
 ) -> tuple[float, str]:
     """Train one (seed, n, lr) run. Returns (best_val_acc, ckpt_path)."""
     probe_indices, probe_labels = get_probe_pool(DATA_DIR)
-    sel_indices = stratified_sample(probe_indices, probe_labels, n_per_class=n // 10)
+    # stratified_sample(labels, n_per_class) returns indices INTO labels (0..3999).
+    # Map back to actual STL-10 train indices via probe_indices.
+    pool_sel    = stratified_sample(probe_labels, n_per_class=n // 10)
+    sel_indices = [probe_indices[i] for i in pool_sel]
 
     from torch.utils.data import DataLoader, Subset
     import torchvision.transforms as T
@@ -129,7 +155,6 @@ def _train_one(
         if (ep + 1) % 50 == 0 or ep == EPOCHS - 1:
             print(f"    ep={ep+1:>3}  val={acc:.4f}  best={best_acc:.4f}", flush=True)
 
-    # Save best checkpoint
     ckpt_dir  = CKPT_ROOT / _run_key(training_seed, n, lr)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = str(ckpt_dir / "best.ckpt")
@@ -141,14 +166,26 @@ def _train_one(
 def main() -> None:
     device = "mps" if torch.backends.mps.is_available() else (
              "cuda" if torch.cuda.is_available() else "cpu")
+    sha = _git_sha()
     print(f"[scratch] device={device}  seeds={TRAINING_SEEDS}  "
-          f"n={N_VALUES}  lrs={LR_LIST}  epochs={EPOCHS}")
+          f"n={N_VALUES}  lrs={LR_LIST}  epochs={EPOCHS}  git={sha}")
     print(f"[scratch] manifest={MANIFEST}")
     print(f"[scratch] total runs={len(TRAINING_SEEDS) * len(N_VALUES) * len(LR_LIST)}")
+    print(f"[scratch] skip condition: status=='ok' AND epochs_completed=={EPOCHS}")
 
     val_loader = get_val_loader(DATA_DIR, batch_size=256, num_workers=0)
     manifest   = _load_manifest()
-    done_keys  = {r["key"] for r in manifest["runs"]}
+
+    # Build skip set: ONLY truly complete runs (status==ok, epochs_completed==200)
+    done_keys = {r["key"] for r in manifest["runs"] if _is_complete(r)}
+    # Remove error/incomplete entries so they get retried
+    manifest["runs"] = [r for r in manifest["runs"] if _is_complete(r)]
+    if len(manifest["runs"]) < len(done_keys):
+        pass  # shouldn't happen, but be safe
+
+    skipped = len(done_keys)
+    if skipped:
+        print(f"[scratch] {skipped} already-complete run(s) will be skipped")
 
     t_total = time.time()
 
@@ -157,43 +194,54 @@ def main() -> None:
             for lr in LR_LIST:
                 key = _run_key(training_seed, n, lr)
                 if key in done_keys:
-                    print(f"  [SKIP] {key} (already in manifest)")
+                    print(f"  [SKIP] {key} (complete, epochs_completed=200)")
                     continue
 
                 print(f"\n  [{key}] training_seed={training_seed} n={n} lr={lr:.0e}", flush=True)
-                t0 = time.time()
+                t0   = time.time()
+                t0dt = _now_iso()
                 try:
                     val_acc, ckpt_path = _train_one(training_seed, n, lr, val_loader, device)
-                    status = "ok"
+                    status            = "ok"
+                    epochs_completed  = EPOCHS
                 except Exception as exc:
                     print(f"    ERROR: {exc}")
-                    val_acc, ckpt_path, status = float("nan"), "", f"error: {exc}"
+                    val_acc, ckpt_path = float("nan"), ""
+                    status            = f"error: {exc}"
+                    epochs_completed  = 0
 
                 elapsed = time.time() - t0
                 entry = {
-                    "key": key,
-                    "training_seed": training_seed,
-                    "n": n,
-                    "lr": lr,
-                    "val_acc": round(val_acc, 6),
-                    "epochs": EPOCHS,
-                    "status": status,
-                    "ckpt": ckpt_path,
-                    "wall_s": round(elapsed, 1),
+                    "key":               key,
+                    "training_seed":     training_seed,
+                    "n":                 n,
+                    "lr":                lr,
+                    "val_acc":           round(val_acc, 6) if val_acc == val_acc else None,
+                    "epochs_completed":  epochs_completed,
+                    "status":            status,
+                    "ckpt":              ckpt_path,
+                    "wall_s":            round(elapsed, 1),
+                    "start_time":        t0dt,
+                    "end_time":          _now_iso(),
+                    "git_sha":           sha,
                 }
                 manifest["runs"].append(entry)
-                done_keys.add(key)
-                print(f"    → val_acc={val_acc:.4f}  wall={elapsed:.0f}s  status={status}")
-                _save_manifest(manifest)  # flush after every run
+                if status == "ok":
+                    done_keys.add(key)
+                print(f"    → val_acc={val_acc:.4f}  wall={elapsed:.0f}s  "
+                      f"epochs_completed={epochs_completed}  status={status}")
+                _save_manifest(manifest)
 
     # Compute best_per_cell (best-lr selection per (training_seed, n))
     best_per_cell: dict[str, dict] = {}
     for training_seed in TRAINING_SEEDS:
         for n in N_VALUES:
-            cell_key = f"s{training_seed}_n{n}"
+            cell_key  = f"s{training_seed}_n{n}"
             cell_runs = [r for r in manifest["runs"]
-                         if r["training_seed"] == training_seed and r["n"] == n
-                         and r["status"] == "ok"]
+                         if r["training_seed"] == training_seed
+                         and r["n"] == n
+                         and r["status"] == "ok"
+                         and r.get("epochs_completed") == EPOCHS]
             if not cell_runs:
                 continue
             best = max(cell_runs, key=lambda r: r["val_acc"])
@@ -206,7 +254,6 @@ def main() -> None:
     manifest["best_per_cell"] = best_per_cell
     _save_manifest(manifest)
 
-    # Summary table
     total_wall = time.time() - t_total
     print(f"\n[scratch] total wall: {total_wall:.0f}s ({total_wall/3600:.2f}h)")
     print(f"\nBest-lr selection per cell (formal-val):")
@@ -215,7 +262,6 @@ def main() -> None:
     for k, v in sorted(best_per_cell.items()):
         print(f"{k:<14}  {v['val_acc']:>8.4f}  {v['best_lr']:>10.1e}")
 
-    # Cross-seed summary
     print(f"\nCross-seed means ± σ per n:")
     print(f"{'n':>6}  {'mean':>8}  {'σ':>6}")
     print("-" * 26)
