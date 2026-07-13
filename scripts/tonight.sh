@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# tonight.sh — no overnight run
-# Scratch loop relaunches in daylight after the stratified_sample bug fix.
-# Morning session will overwrite this file with the relaunch command.
-
-echo "No overnight run — scratch loop relaunches in daylight after this fix"
+# tonight.sh — 1.6o pointer stub
+# R3 tonight — launch manually per the DECISIONS.md runsheet ritual.
+# Do NOT launch from this file.
+echo "R3 tonight — launch manually per the DECISIONS.md runsheet ritual."
+echo "Command lives in DECISIONS.md §R3 RUNSHEET — read it from there."
 exit 0

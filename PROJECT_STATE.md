@@ -12,17 +12,11 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6l COMPLETE** — Scratch loop crash fix (Jul 12). stratified_sample bug fixed, manifest wiped, hardened schema, 113/113 tests pass.
+**Step 1.6o COMPLETE** — Final gate evidence + scratch adjudication + R3 GO (Jul 12). Branch B2 fires: R3 tonight without scratch; gap column blank-with-note. Val smoke-test exit 0. Patches ALREADY_PATCHED × both.
 
-**Tonight's command:** none — scratch loop relaunches in morning session.
-```
-bash scripts/tonight.sh   # prints "No overnight run..." and exits 0
-```
+**Tonight's command:** `bash scripts/tonight.sh` → prints "R3 tonight — launch manually per the DECISIONS.md runsheet ritual." R3 must be launched by human from DECISIONS.md. Not from this file, not from tonight.sh.
 
-**Morning session task:** overwrite tonight.sh with the relaunch command, then run `bash scripts/tonight.sh` (~3–4h daytime).
-
-**Saturday's command (R3 — read from DECISIONS.md runsheet, not from here):**
-See DECISIONS.md §R3 RUNSHEET. Perform the 5-checkpoint count + `--split test` confirmation ritual before launching.
+**Today's tasks: see Next actions table.**
 
 ---
 
@@ -254,15 +248,156 @@ Wall time: 125 min.  Report: `reports/probe_seed0_val.md`
 | **DONE** | Full val benchmark complete → `reports/terminal_val.md` (b803je03m, 3389s, exit 0) |
 | **DONE** | Gate 1B floor approved (0.582±0.018). R3 runsheet approved. Amendments A1–A9 implemented. |
 | **DONE** | Harness smoke-tested on val (dry run, no --unlock_test): manifest OK, mahal_tgt/ctx/mae_untrained/random_init all computed, Stage 2+3 running |
-| **Tonight** | Scratch loop (A3): `caffeinate -is uv run python scripts/run_scratch_comparator.py` (~3–4h, writes reports/scratch_manifest.json) |
-| **Saturday 1** | Scratch manifest gate: confirm 36/36 runs present in reports/scratch_manifest.json, n=4000 val_acc sanity band (expect ~0.55–0.65 for best-lr), human eyeballs on per-cell table printed by run_scratch_comparator.py |
-| **Saturday 2** | Stage-4 scratch-gap wiring: read scratch_manifest.json best_per_cell, wire gap column into terminal_benchmark.py Stage 4 report, smoke-test on val WITHOUT --unlock_test (write to tonight.sh before running) |
-| **Saturday 3** | 8/13-vs-10/13 win-count reconciliation: recount JEPA ref_s0 > pixel_std per-type from the 13-type log (benchmark_full2.log), compute per-type Δ vs pixel_std, determine when mask seed=0 entered the energy call (git log src/eval/energy.py), resolve discrepancy and record binding count in PROJECT_STATE.md |
-| **Saturday 4** | Re-verify glass_blur + fog patch persists (uv run python scripts/patch_imagecorruptions.py — both should print ALREADY_PATCHED) |
-| **Saturday night** | R3: human-launched from DECISIONS.md runsheet per the 5-checkpoint launch ritual. Not from chat recap, not from tonight.sh. |
+| ~~**Tonight**~~ **DONE** | Scratch loop (A3): 36/36 complete, 4.70h. n=40=0.2397±0.0076, n=200=0.3533±0.0098, n=400=0.3893±0.0032, n=4000=0.5787±0.0121. Gate 1B(iii) val-side preliminary: gaps +3.9/+3.8/+4.7/+0.3pp |
+| **Scratch manifest gate** | Confirm 36/36 in reports/scratch_manifest.json, n=4000 sanity band [0.55, 0.70] (observed 0.566–0.590 ✓), eyeball per-cell table |
+| **Gap wiring + val smoke** | Wire gap column into terminal_benchmark.py Stage 4; smoke-test on val (no --unlock_test). B2 fallback: gap blank-with-note pending recipe-fixed scratch rerun |
+| **Win-count reconciliation** | Binding count 11/15 from terminal_val.md (15-type run). "8/13" from 1.6g was a text error — the 1.6g table yields 10/13; glass(✗)/fog(✓) added in 1.6h → 11/15. Mask seed=0 in energy.py since d66ba65 (scaffold). Corruption generation unseeded but once-and-shared across models → no change. |
+| **Patch verify** | `uv run python scripts/patch_imagecorruptions.py` → ALREADY_PATCHED × both ✓ (confirmed this session) |
+| **R3** | Human-launched per DECISIONS.md runsheet launch ritual. |
 | Then | Write reports/phase1.md from terminal_test.md; Phase 2 kickoff |
 
-**Gate 1B floor**: approved 0.582±0.018 (ref_s0 n=4000, training-seed σ). Gate 1B(i): paired-bootstrap CI on AUROC margin excludes 0. Gate 1B(ii): 0.582±0.018 reported, not gated. Gate 1B(iii): JEPA > scratch at n=40/200/400. See DECISIONS.md.
+**Gate 1B floor**: approved 0.582±0.018 (reference config, n=4000, mean ± std over training seeds {0.600, 0.565, 0.579}). Gate 1B(i): paired-bootstrap CI on AUROC margin excludes 0. Gate 1B(ii): 0.582±0.018 reported, not gated. Gate 1B(iii): val-side preliminary (gaps +3.9/+3.8/+4.7/+0.3pp); formal gate at R3. See DECISIONS.md.
+
+---
+
+## Step 1.6o — Final gate evidence + scratch adjudication + R3 GO (2026-07-12)
+
+**Item 0: Corrections applied.** Gate 1B(iii) language changed from "PASS ✓" to "val-side preliminary — formal at R3". Gate 1B floor label corrected to "(reference config, n=4000, mean ± std over training seeds {0.600, 0.565, 0.579})". Scratch sanity band restored to [0.55, 0.70]. Saturday-N labels relabelled to functional names. DECISIONS.md launch ritual step 4 amended (4a/4b/4c/4d split). tonight.sh overwritten as pointer stub.
+
+**Item 1: Scratch evidence (36/36 complete).**
+
+Per-lr per (seed, n) all status=ok, epochs_completed=200:
+
+| key | n | lr | val_acc |
+|---|---|---|---|
+| s0_n40 | 40 | 1e-03 | 0.2330 | s0_n40_lr3e-04 | 0.226 | s0_n40_lr1e-04 | 0.223 |
+| s0_n200 | 200 | 1e-03 | 0.328 | 3e-04 | 0.359★ | 1e-04 | 0.343 |
+| s0_n400 | 400 | 1e-03 | 0.368 | 3e-04 | 0.393★ | 1e-04 | 0.374 |
+| s0_n4000 | 4000 | 1e-03 | 0.576 | 3e-04 | 0.577 | 1e-04 | **0.580**★ |
+| s1_n40 | 40 | 1e-03 | **0.248**★ | 3e-04 | 0.241 | 1e-04 | 0.238 |
+| s1_n200 | 200 | 1e-03 | 0.339 | 3e-04 | 0.349 | 1e-04 | **0.359**★ |
+| s1_n400 | 400 | 1e-03 | 0.358 | 3e-04 | 0.371 | 1e-04 | **0.387**★ |
+| s1_n4000 | 4000 | 1e-03 | 0.561 | 3e-04 | 0.559 | 1e-04 | **0.566**★ |
+| s2_n40 | 40 | 1e-03 | **0.238**★ | 3e-04 | 0.232 | 1e-04 | 0.234 |
+| s2_n200 | 200 | 1e-03 | 0.326 | 3e-04 | **0.342**★ | 1e-04 | 0.338 |
+| s2_n400 | 400 | 1e-03 | 0.354 | 3e-04 | 0.380 | 1e-04 | **0.388**★ |
+| s2_n4000 | 4000 | 1e-03 | 0.568 | 3e-04 | 0.578 | 1e-04 | **0.590**★ |
+
+★ = best_lr selection. n=4000 sanity band [0.55, 0.70]: observed 0.566–0.590 ✓.
+
+Cross-seed means ± σ: n=40 0.2397±0.0076, n=200 0.3533±0.0098, n=400 0.3893±0.0032, n=4000 0.5787±0.0121.
+
+**Item 2: Scratch discrepancy adjudication — Branch B2 fires.**
+
+s0_n4000 per-lr (same seed as 1.5d 0.636): lr1e-03=0.576, lr3e-04=0.577, lr1e-04=0.580. Best=0.580 ≤ 0.60.
+
+Recipe diff (1.5d probe_sweep.py vs A3 run_scratch_comparator.py):
+- **Augmentation**: 1.5d had `RandomResizedCrop(96, scale=(0.5,1.0)) + RandomHorizontalFlip`. A3 has `Resize(96) + CenterCrop(96)` only (no augmentation). This is the dominant driver.
+- **Batch size**: 1.5d=128 fixed; A3=min(256,n). At n=4000: 1.5d 2× more steps/epoch.
+- **Effective optimizer steps at n=4000**: 1.5d ceil(4000/128)=32 steps/ep × 200ep = 6400; A3 ceil(4000/256)=16 × 200 = 3200. A3 has ~2× fewer steps PLUS no augmentation.
+- **Train accuracy**: not logged (ScratchClassifier only saves val_acc).
+
+Branch B fires (s0_n4000 ≤ 0.60 AND concrete optimization disadvantage confirmed). B1 vs B2: re-running 9 n=4000 cells with batch=128 + augmentation would take ~5-6h and cannot complete by ~20:00. **Branch B2 fires: R3 tonight WITHOUT scratch. Gap column BLANK-WITH-NOTE in terminal_benchmark.py Stage 4. Gate 1B(iii) evaluated post-hoc on val with recipe-fixed scratch. Test set NEVER reopens for scratch.**
+
+**Item 4: Win-count + corruption-RNG reconciliation.**
+
+(a) Binding count: **11/15** from terminal_val.md (15-type run, step 1.6h). Manual recount: gaussian✓ shot✓ impulse✓ zoom✓ frost✓ fog✓ brightness✓ contrast✓ elastic✓ pixelate✓ jpeg✓ — defocus✗ glass✗ motion✗ snow✗.
+
+Source of "8/13": text error in step 1.6g. The 1.6g table yields 10/13 wins (recount: gaussian, shot, impulse, zoom, frost, brightness, contrast, elastic, pixelate, jpeg). The 1.6g text "8/13" was simply incorrect. Adding glass(✗) + fog(✓) in 1.6h gives 11/15.
+
+(b) Per-type deltas between 1.6g and 1.6h runs: ≤0.001 for all types (within bootstrap noise). Same corrupted images used.
+
+(c) Corruption generation: unseeded (no seed arg in `_corrupt_tensor`), BUT once-and-shared per (type, severity) across all models in Stage 2. → "once-and-shared" condition: no change needed.
+
+(d) Mask seed=0 in energy.py since `d66ba65` (scaffold commit). Both 1.6g and 1.6h val runs had seed=0.
+
+**Item 5: Preconditions.**
+- `uv run python scripts/patch_imagecorruptions.py` → Fix 1 (glass_blur): ALREADY_PATCHED; Fix 2 (fog): ALREADY_PATCHED ✓
+- Approval lines: present in DECISIONS.md §1.6i (Gate 1B floor: Anuj 2026-07-10; R3 runsheet: Anuj 2026-07-10)
+- tonight.sh: overwritten as pointer stub (echoes "R3 tonight — launch manually per DECISIONS.md runsheet ritual")
+- Gap wiring: terminal_benchmark.py Stage 4 now loads scratch_manifest.json, shows gap with B2 underfit note
+
+**Val smoke-test (dry_run, split=val, no --unlock_test): exit 0 ✓**
+
+Startup manifest:
+```
+[manifest] split=val
+[manifest] val=1000 (data/splits/stl10_val_idx.json, 100/class seed=0)
+[manifest] probe_pool=4000 (STL-10 labeled train complement of val)
+[manifest] OOD: SVHN test + CIFAR-10 test (data/ood/)
+[scratch gap] loaded 4/4 cells from scratch_manifest.json
+```
+
+Stage 4 probe-grid section (from reports/terminal_val_s4gap.md):
+```
+Model                         n=40         n=200         n=400         n=4000
+---------------------------------------------------------------------------
+ref_s0                0.2937±0.0034  0.4147±0.0246  0.4550±0.0073  0.6030±0.0008
+ref_s1                0.2690±0.0043  0.3653±0.0116  0.4170±0.0118  0.5643±0.0017
+ref_s2                0.2683±0.0184  0.3897±0.0160  0.4357±0.0109  0.5803±0.0005
+hardmask_s0*          0.2950±0.0022  0.4180±0.0142  0.4813±0.0146  0.5897±0.0009
+
+JEPA ref mean                0.277         0.390         0.436         0.583
+Scratch A3 mean              0.240         0.353         0.389         0.579
+Gap (JEPA-ref−A3)         +0.0373*      +0.0366*      +0.0466*      +0.0039*
+
+* A3 recipe underfit: batch=min(256,n) vs 1.5d batch=128; no augmentation vs RandomResizedCrop+HFlip.
+  Gap shown for reference; binding gap requires recipe-fixed rerun.
+  Gate 1B(iii) post-hoc on val; test set never reopens.
+```
+
+Gap wiring confirmed working. Scratch 4/4 cells loaded. Gaps positive at all n. B2 note printed correctly.
+
+---
+
+## Step 1.6n — Scratch results + Gate 1B(iii) val-side preliminary (2026-07-12)
+
+**A3 scratch comparator — 36/36 complete, 4.70h total wall.**
+
+Best-lr per cell (formal-val, best lr per training-seed × n):
+
+| Cell | val_acc | best_lr |
+|---|---|---|
+| s0_n40 | 0.2330 | 1e-03 |
+| s0_n200 | 0.3590 | 1e-03 |
+| s0_n400 | 0.3930 | 1e-03 |
+| s0_n4000 | 0.5800 | 1e-03 |
+| s1_n40 | 0.2480 | 1e-03 |
+| s1_n200 | 0.3590 | 1e-03 |
+| s1_n400 | 0.3870 | 1e-03 |
+| s1_n4000 | 0.5660 | 3e-04 |
+| s2_n40 | 0.2380 | 1e-03 |
+| s2_n200 | 0.3420 | 1e-03 |
+| s2_n400 | 0.3880 | 1e-03 |
+| s2_n4000 | 0.5900 | 1e-03 |
+
+Cross-seed means ± σ per n:
+
+| n | scratch mean | σ |
+|---|---|---|
+| 40 | 0.2397 | 0.0076 |
+| 200 | 0.3533 | 0.0098 |
+| 400 | 0.3893 | 0.0032 |
+| 4000 | 0.5787 | 0.0121 |
+
+**Gate 1B(iii) val-side preliminary — gaps consistent with pass; formal evaluation at R3 on test; gate decision = human.**
+
+| n | JEPA (b803je03m 3-seed mean) | Scratch (A3 3-seed mean) | Gap |
+|---|---|---|---|
+| 40 | 0.2783 | 0.2397 | **+3.9 pp** ✓ |
+| 200 | 0.3912 | 0.3533 | **+3.8 pp** ✓ |
+| 400 | 0.4359 | 0.3893 | **+4.7 pp** ✓ |
+| 4000 | 0.5815 | 0.5787 | +0.3 pp (tie) |
+
+Pre-registered rule: JEPA > scratch at n=40/200/400 → PASS. n=4000 tie is outside the gate criterion.
+
+tonight.sh overwritten for Saturday-2 smoke-test (Stage-4 gap wiring, val split, no --unlock_test).
+
+---
+
+## Step 1.6m — Daylight scratch relaunch (2026-07-12)
+
+tonight.sh overwritten with full scratch loop command. Manifest clean-empty (pre-registered wipe of all 13 error entries from 1.6l). 36 runs launched: `caffeinate -is uv run python scripts/run_scratch_comparator.py`. Results in Step 1.6n.
 
 ---
 
@@ -397,7 +532,7 @@ OOD interpretation logged: JEPA energy inverts on low-complexity semantic OOD (S
 3-seed reference n=4000: mean = **0.582**, σ_training_seed = **0.018**.
 All σ_probe < 0.005 → probe measurement variance negligible; training-seed spread is real.
 Gate 1B criterion (ii) reported value: **0.582 ± 0.018** (APPROVED — Anuj, 2026-07-10; per-encoder means {0.600, 0.565, 0.579}, sample-σ over 3 training seeds).
-Gate 1B criterion (iii): JEPA > scratch confirmed at R3 with fresh A3 runs (not injected from 1.5d).
+Gate 1B criterion (iii): val-side preliminary — gaps n=40 +3.9pp, n=200 +3.8pp, n=400 +4.7pp, n=4000 +0.3pp. Consistent with pass; formal evaluation at R3 on test; gate decision = human.
 
 **bootstrap.py smoke-test (Item 4b): PASS.** `bootstrap_auroc_ci(n_boot=2000)` → point=0.688 lo=0.665 hi=0.711, CI properly contains point estimate. R3 dependency confirmed.
 
@@ -479,7 +614,7 @@ Stage 2 scales 8× (8k vs 1k images) → ~2626s×8 ≈ 21,000s. Stage 3 unchange
 - ~~0.583 ± 0.016 (superseded — from earlier 2-probe-seed run; stricken)~~
 - σ_probe per cell: 0.0005–0.0021 (all < 0.005) → probe variance not masking training-seed signal ✓
 - Gate 1B criterion (ii) probe value: **0.582 ± 0.018** (APPROVED — Anuj, 2026-07-10)
-- Gate 1B criterion (iii): JEPA > scratch at n=40/200/400 confirmed at R3 with fresh A3 scratch runs (not injected from 1.5d)
+- Gate 1B criterion (iii): val-side preliminary — gaps n=40 +3.9pp, n=200 +3.8pp, n=400 +4.7pp, n=4000 +0.3pp. Consistent with pass; formal evaluation at R3 on test; gate decision = human.
 
 ---
 

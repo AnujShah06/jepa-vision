@@ -175,7 +175,10 @@ caffeinate -is uv run python scripts/terminal_benchmark.py \
 1. Read the command from this runsheet — never from a chat summary or session recap.
 2. Count 5 checkpoint paths in the command: tkqjawa0, lbd900za, gommvdgc, fw1out6d, eoofx7fk. All 5 must be present.
 3. Confirm `--split test --unlock_test` (not `--split val --unlock_test`).
-4. Launch. Verify within the first 2 minutes: manifest line `split=test n=8000` appears, and glass_blur + fog complete (not SKIPPED) in early Stage 2.
+4a. Within 2 min: manifest prints `split=test n=8000`.
+4b. Pre-launch: `uv run python scripts/patch_imagecorruptions.py` prints ALREADY_PATCHED for BOTH patches (glass_blur and fog).
+4c. Before sleeping: Stage-2 log shows glass_blur completed (not SKIPPED).
+4d. Morning: confirm fog completed (not SKIPPED).
 5. Do not interrupt after Stage 2 begins unless a crash occurs.
 
 ---
@@ -211,6 +214,18 @@ Root cause (corrected): clean-val mean ts=0.789 ≈ E|Z|=√(2/π)≈0.798 — t
 Per pre-registered rule (FAIL on Condition B): two-sided readout NOT integrated into harness. Report attempt only. Primary OOD readout: mahal_tgt (D3, probe-pool-fit). One-sided JEPA energy: corruption readout.
 
 **Binding scope:** two-sided readout may NOT be computed from R3 test dumps. Any future test-side use of a two-sided formulation requires a new pre-registration and explicit human approval before the test set is opened.
+
+[1.6o] **Scratch comparator recipe underfit — Branch B2 fires (2026-07-12)**
+
+s0_n4000 best val_acc = 0.580 ≤ 0.60. Recipe diff confirmed:
+- A3 (run_scratch_comparator.py): batch=min(256,n), no data augmentation, ~3200 optimizer steps at n=4000.
+- 1.5d (probe_sweep.py): batch=128, RandomResizedCrop(96,scale=(0.5,1.0))+RandomHorizontalFlip, ~6400 steps at n=4000.
+- Concrete optimization disadvantage confirmed → Branch B fires.
+- B1 vs B2: recipe-fixed rerun of 9 n=4000 cells (~5-6h) cannot complete by ~20:00 → Branch B2.
+
+**Binding consequence:** R3 tonight WITHOUT scratch. Gap column in terminal_benchmark.py Stage 4 is BLANK-WITH-NOTE. Gate 1B(iii) evaluated post-hoc on val with recipe-fixed scratch. **Test set NEVER reopens for scratch.** Scratch recipe fix required before any future comparison.
+
+**Pre-registered Gap definition (binding for eventual fix):** JEPA 3-ref-seed mean at n (mean of per-encoder means over probe seeds) minus scratch 3-seed mean at n (mean of best-lr val_acc over training seeds). Mean-vs-mean, not paired per training seed.
 
 [1.6i] **Approvals ledger**
 

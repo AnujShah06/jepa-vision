@@ -371,6 +371,8 @@ def main() -> None:
     parser.add_argument("--unlock_test",   action="store_true")
     parser.add_argument("--dry_run",       action="store_true",
                         help="3 corruption types instead of 15 (harness validation)")
+    parser.add_argument("--scratch_manifest", default="reports/scratch_manifest.json",
+                        help="Path to A3 scratch comparator manifest (for Stage 4 gap column)")
     parser.add_argument("--K",             type=int, default=8)
     parser.add_argument("--n_boot",        type=int, default=2000)
     parser.add_argument("--n_fit",         type=int, default=1000,
@@ -693,6 +695,33 @@ def main() -> None:
     print(f"  [A7] clean energy arrays → {energy_dump_dir}/clean_*_{split_tag}.npy")
     print(f"  [A7] OOD AUROC dump      → {dump_path}")
 
+    # ── Scratch gap wiring (A3 manifest) ─────────────────────────────────────
+    # Gap definition: JEPA 3-ref-seed mean at n minus A3 3-seed mean at n.
+    # Branch B2: A3 recipe underfit confirmed (batch=min(256,n), no augmentation
+    #   vs 1.5d batch=128+RandomResizedCrop). Gap shown with underfit note.
+    _scratch_path = Path(args.scratch_manifest)
+    scratch_mean_n: dict[int, float | None] = {n: None for n in [40, 200, 400, 4000]}
+    scratch_gap_note = ""
+    if _scratch_path.exists():
+        import json as _jscr
+        _scr_m = _jscr.load(open(_scratch_path))
+        _bpc = _scr_m.get("best_per_cell", {})
+        for _n in [40, 200, 400, 4000]:
+            _accs = [_bpc[f"s{_s}_n{_n}"]["val_acc"]
+                     for _s in [0, 1, 2] if f"s{_s}_n{_n}" in _bpc]
+            if len(_accs) == 3:
+                scratch_mean_n[_n] = sum(_accs) / 3
+        _n_loaded = sum(1 for v in scratch_mean_n.values() if v is not None)
+        print(f"  [scratch gap] loaded {_n_loaded}/4 cells from {_scratch_path.name}")
+        scratch_gap_note = (
+            "* A3 recipe underfit: batch=min(256,n) vs 1.5d batch=128; no augmentation "
+            "vs RandomResizedCrop+HFlip. Gap shown for reference; binding gap requires "
+            "recipe-fixed rerun. Gate 1B(iii) post-hoc on val; test set never reopens."
+        )
+    else:
+        print(f"  [scratch gap] manifest not found: {_scratch_path}")
+        scratch_gap_note = f"* Scratch manifest not found: {_scratch_path}"
+
     # ── Stage 4: Probe grid (3 probe seeds per cell) ─────────────────────────
     print("\n[Stage 4] Probe grid (3 probe seeds per cell) ...")
     stage4_t0 = time.time()
@@ -822,6 +851,16 @@ def main() -> None:
     def _ms(vals: list[float]) -> str:
         return f"{_pmean(vals):.4f}±{_pstd(vals):.4f}"
 
+    # Compute JEPA 3-ref-seed mean per n for gap column
+    _ref_labels = [l for l in probe_results if l.startswith("ref_s")]
+    def _ref_mean_n(n: int) -> float | None:
+        accs = []
+        for lbl in _ref_labels:
+            vals = probe_results[lbl].get(n, [])
+            if vals:
+                accs.append(sum(vals) / len(vals))
+        return sum(accs) / len(accs) if accs else None
+
     lines += [
         "",
         "## Stage 4 — Probe Grid (locked: target mean+zscore, lr-sweep, 200ep, 3 probe seeds)",
@@ -836,6 +875,26 @@ def main() -> None:
             f"{_ms(pr.get(400, [])):>12}  "
             f"{_ms(pr.get(4000,[])):>13}"
         )
+
+    # Scratch gap rows
+    if _ref_labels:
+        def _gap_str(n: int) -> str:
+            ref = _ref_mean_n(n)
+            scr = scratch_mean_n.get(n)
+            if ref is None or scr is None:
+                return "       —"
+            return f"{(ref - scr):+.4f}*"
+        lines += [
+            "",
+            f"{'JEPA ref mean':<20}  " +
+            "  ".join(f"{_fmt(_ref_mean_n(n) or float('nan')):>12}" for n in [40, 200, 400, 4000]),
+            f"{'Scratch A3 mean':<20}  " +
+            "  ".join(f"{_fmt(scratch_mean_n.get(n) or float('nan')):>12}" for n in [40, 200, 400, 4000]),
+            f"{'Gap (JEPA-ref−A3)':<20}  " +
+            "  ".join(f"{_gap_str(n):>12}" for n in [40, 200, 400, 4000]),
+            "",
+            scratch_gap_note,
+        ]
 
     lines += [
         "",
