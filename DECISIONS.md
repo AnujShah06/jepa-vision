@@ -227,6 +227,16 @@ s0_n4000 best val_acc = 0.580 ≤ 0.60. Recipe diff confirmed:
 
 **Pre-registered Gap definition (binding for eventual fix):** JEPA 3-ref-seed mean at n (mean of per-encoder means over probe seeds) minus scratch 3-seed mean at n (mean of best-lr val_acc over training seeds). Mean-vs-mean, not paired per training seed.
 
+[1.6p] **R3 run-1 ABORTED — interruption exception invoked (2026-07-14)**
+
+R3 run-1 (overnight Jul 12→13) aborted at ~9/75 Stage-2 cells: kIOGPUCommandBufferCallbackErrorOutOfMemory at shot_noise sev2. Interruption exception invoked under ritual step 5 (crash-equivalent; integrity doubt due to post-OOM non-monotone shot values). All run-1 Stage-2 numbers discarded; NUMBERS NOT USED IN ANY REPORT.
+
+Root cause: Stage-2 evaluation loop sent full 8k tensor (884 MB) to MPS per model per cell; no cleanup between cells; MPS allocator exhausted at ~cell 10.
+
+Infra fix (throughput-only, eval logic FROZEN): chunked GPU evaluation (chunk=1000), explicit `del + torch.mps.empty_cache()` after each cell, pixel_std moved to CPU-only.
+
+Rule: infra fixes require val parity gate (energy max|Δ|≤1e-4, AUROC identical to 3 decimals) and zero eval-logic change before relaunching. Parity gate is a hard block; failure = STOP.
+
 [1.6i] **Approvals ledger**
 
 **Gate 1B floor revision APPROVED — Anuj, 2026-07-10.** Canonical value: 0.582±0.018 (3-seed mean±sample-σ, per-encoder means {0.600, 0.565, 0.579}, val n=4000 locked protocol epoch_0150). Replaces stale 0.583±0.016. Gate 1B(ii): reported, not gated.

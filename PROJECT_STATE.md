@@ -12,9 +12,9 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6o COMPLETE** — Final gate evidence + scratch adjudication + R3 GO (Jul 12). Branch B2 fires: R3 tonight without scratch; gap column blank-with-note. Val smoke-test exit 0. Patches ALREADY_PATCHED × both.
+**Step 1.6p COMPLETE** — R3 run-1 aborted (MPS OOM). Memory fix applied (chunked eval, del+empty_cache). Parity gate PASS. Throughput rehearsal GO (cell=217s ≤ 400s, projected 4.9h). R3 run-2: GO — launch from DECISIONS.md runsheet.
 
-**Tonight's command:** `bash scripts/tonight.sh` → prints "R3 tonight — launch manually per the DECISIONS.md runsheet ritual." R3 must be launched by human from DECISIONS.md. Not from this file, not from tonight.sh.
+**Tonight's command:** `bash scripts/tonight.sh` → prints pointer to DECISIONS.md runsheet. Launch R3 run-2 from there per ritual.
 
 **Today's tasks: see Next actions table.**
 
@@ -35,6 +35,7 @@ Never describe status from memory — only from this table.
 | Reference seed 2 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `gommvdgc` — eff_rank 173.2, loss 0.2072, pred_loss 0.2045, spread 19.54, var 0.995. best.ckpt=ep145. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.582 (probe seeds {0,1,2}: 0.582/0.579/0.584, σ=0.0025) |
 | Hardmask seed 0  | `configs/phase1_hardmask.yaml` | DONE, Gate 1A passed. **Adoption REJECTED** (probe 0.587 < 0.62) | `fw1out6d` — eff_rank 189.2, loss 0.2933, pred_loss 0.2918 (ep150). best.ckpt is epoch 2 (checkpoint-saving bug). **Canonical: epoch_0150.ckpt**. Probe n=4000 0.587 (statistically indistinguishable from reference spread 0.564–0.601) |
 | MAE baseline     | `configs/mae_baseline.yaml` | **DONE** | `eoofx7fk` (deep-music-14) — final loss 0.4630, epoch 149 (0-indexed). **Canonical: epoch_0150.ckpt** (150 % 10 == 0 ✓). best.ckpt valid (MAE loss monotone). W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/eoofx7fk |
+| **R3 run-1** | terminal_benchmark.py (all 5 ckpts, test split) | **ABORTED — DO-NOT-USE** | Launched overnight Jul 12→13. Aborted at ~9/75 Stage-2 cells: kIOGPUCommandBufferCallbackErrorOutOfMemory at shot_noise sev2. Stage-1 clean means completed cleanly (all 10 heads). 9 observed Stage-2 cells (gaussian sev1-5: 0.747/0.687/0.722/0.879/0.964; shot sev1-4: 0.973/0.755/0.995/0.928 — non-monotone, post-OOM corruption suspected). Interruption exception invoked (ritual step 5). **NUMBERS NOT USED IN ANY REPORT.** |
 
 **Checkpoint-saving bug note:** For the hardmask run, pred_loss is NOT monotonically decreasing — it starts low (EMA target close to context encoder early in training) and rises as EMA momentum grows from 0.996→1.0. The checkpoint saver saved epoch 2 as "best" because it had the lowest pred_loss (0.2738). The correct fully-trained checkpoint is epoch_0150.ckpt (pred_loss 0.2918). The adoption verdict used epoch_0150.ckpt. This bug does not affect reference runs (their loss is monotonically decreasing). Must fix checkpoint saving for future runs that use increasing-difficulty schedules.
 
@@ -347,6 +348,63 @@ Gap (JEPA-ref−A3)         +0.0373*      +0.0366*      +0.0466*      +0.0039*
 ```
 
 Gap wiring confirmed working. Scratch 4/4 cells loaded. Gaps positive at all n. B2 note printed correctly.
+
+---
+
+## Step 1.6p — R3 run-1 aborted (MPS OOM) — memory fix + parity gate (2026-07-14)
+
+**Item 0: R3 run-1 recorded.**
+- Launched overnight Jul 12→13 from DECISIONS.md runsheet (all 5 ckpts, --split test --unlock_test).
+- Aborted at ~9/75 Stage-2 cells: kIOGPUCommandBufferCallbackErrorOutOfMemory at shot_noise sev2.
+- Interruption exception invoked (integrity doubt = crash-equivalent under ritual step 5).
+- Stage-1 clean means completed, all 10 heads (no integrity concern).
+- Stage-2 evidence (9 cells, NUMBERS NOT USED):
+  - gaussian sev1-5: 0.747/0.687/0.722/0.879/0.964 (mean 0.800, in-band)
+  - shot sev1-4: 0.973/0.755/0.995/0.928 (non-monotone, post-OOM corruption suspected → discarded)
+- Root cause: Stage-2 loop sent full 8k×3×96×96 float32 tensor (~884 MB) to MPS per model per cell; K=8 mask iterations accumulate intermediate activations on top of that; with 4 JEPA models + pixel_std + random_init + 2 mahal + MAE running sequentially per cell, MPS allocator exhausted at ~cell 10.
+
+**Item 1: Memory fix (throughput-only; eval logic FROZEN).**
+- `scripts/terminal_benchmark.py` changes:
+  - Added `--eval_chunk_size` (default=1000). Runsheet command UNCHANGED.
+  - Stage 2: all 6 unbatched energy calls replaced with batched equivalents:
+    - JEPA models: `_jepa_energy` → `_jepa_energy_batched(..., batch_size=eval_chunk_size)`
+    - pixel_std: `pixel_stats_energy(cor_imgs.to(device)).cpu()` → `pixel_stats_energy(cor_imgs)` (CPU-only, no device move)
+    - random_init: `_jepa_energy(rand_model,...)` → `_jepa_energy_batched(..., batch_size=eval_chunk_size)`
+    - mahal_tgt: explicit batch_size=eval_chunk_size (was already batched but implicit default)
+    - mahal_ctx: `mahalanobis_energy(cor_imgs,...)` → `_mahal_energy_batched(..., batch_size=eval_chunk_size)`
+    - mae_untrained, mae_trained: unchanged (already batched at bs=64)
+  - Stage 1: two fixes: pixel_std no longer moved to device; mahal_ctx uses `_mahal_energy_batched`.
+  - After each Stage-2 cell: `del cor_imgs; torch.mps.empty_cache()` (MPS allocator flush).
+  - Crash insurance: after each cell, append completed-cell JSON to `reports/terminal_test_progress.jsonl` (write-only, test split only).
+
+**Item 2: Parity gate — PASS.**
+- Script: `scripts/parity_gate_1p.py` (exit 0)
+- (a) Energy parity: JEPA max|Δ|=0.00e+00 [PASS]; pixel_std max|Δ|=1.19e-07 [PASS]; mahal_ctx max|Δ|=0.00e+00 [PASS]
+- (b) AUROC parity (all 10 heads, 200 images, gaussian_noise sev=3):
+  - ref_s0: 0.761 [PASS]; ref_s1: 0.592 [PASS]; ref_s2: 0.588 [PASS]; hardmask_s0*: 0.878 [PASS]
+  - pixel_std: 0.733 [PASS]; random_init: 0.467 [PASS]; mahal_tgt: 0.732 [PASS]; mahal_ctx: 0.945 [PASS]
+  - mae_untrained: 0.472 [PASS]; mae_trained: 0.994 [PASS]
+- **Gate: PASS — relaunch unblocked.**
+
+**Item 3: Throughput rehearsal — GO.**
+- Synthetic 8k = val × 8 (zero test contact), gaussian_noise sev=3, all 10 heads.
+- Corruption generation: 5.9s
+- Stage 1 (clean energies, 8k): 209.8s
+- One cell wall (all heads, 8k): 217.2s ← **≤ 400s → GO**
+- MPS driver alloc after cleanup: 189 MB (confirms no memory leak)
+- Projected Stage 2 (75 cells): 271 min (~4.5h)
+- Projected total (Stage 1-4): 4.9h
+- **Verdict: GO tonight — projected complete ~5h after launch.**
+
+**Item 5: Run-2 integrity diagnostic (pre-registered).**
+On R3 run-2 completion, compare run-2 gaussian/shot cells against run-1 observed values:
+- gaussian sev1: run-1=0.747; run-2 should be within normal noise (±0.05 expected for test)
+- gaussian sev2: run-1=0.687; compare
+- gaussian sev3: run-1=0.722; compare
+- gaussian sev4: run-1=0.879; compare
+- gaussian sev5: run-1=0.964; compare
+- shot sev1: run-1=0.973 (suspect, post-OOM); note in comparison
+This diagnostic GATES NOTHING. Purpose: detect if run-2 has a systematic issue vs the clean run-1 cells (gaussian sev1-5 were pre-OOM and should be trustworthy). Any large deviation from gaussian sev1-5 warrants investigation before finalising the report.
 
 ---
 

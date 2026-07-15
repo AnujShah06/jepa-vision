@@ -377,6 +377,8 @@ def main() -> None:
     parser.add_argument("--n_boot",        type=int, default=2000)
     parser.add_argument("--n_fit",         type=int, default=1000,
                         help="Val images used to fit Mahalanobis covariance")
+    parser.add_argument("--eval_chunk_size", type=int, default=1000,
+                        help="Batch size for chunked GPU eval in Stage 2 (prevents MPS OOM at 8k scale)")
     parser.add_argument("--out",           default="reports/terminal_dryrun.md")
     args = parser.parse_args()
 
@@ -503,7 +505,7 @@ def main() -> None:
         clean_e[label] = _jepa_energy(model, clean_imgs, args.K, device)
         print(f"  {label}: mean={clean_e[label].mean():.4f}  ({time.time()-t0:.1f}s)")
 
-    clean_e["pixel_std"] = pixel_stats_energy(clean_imgs.to(device)).cpu()
+    clean_e["pixel_std"] = pixel_stats_energy(clean_imgs)
     print(f"  pixel_std: mean={clean_e['pixel_std'].mean():.4f}")
 
     t0 = time.time()
@@ -515,7 +517,7 @@ def main() -> None:
     print(f"  mahal_tgt: mean={clean_e['mahal_tgt'].mean():.4f}  ({time.time()-t0:.1f}s)")
 
     t0 = time.time()
-    clean_e["mahal_ctx"] = mahalanobis_energy(clean_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device)
+    clean_e["mahal_ctx"] = _mahal_energy_batched(clean_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device, batch_size=args.eval_chunk_size)
     print(f"  mahal_ctx: mean={clean_e['mahal_ctx'].mean():.4f}  [FIT-ON-EVAL-SET]  ({time.time()-t0:.1f}s)")
 
     t0 = time.time()
@@ -551,31 +553,32 @@ def main() -> None:
                 skipped_cells.append(f"{corruption}/sev{severity}")
                 continue
 
+            _cs = args.eval_chunk_size
             for label, model in jepa_models.items():
                 corr_results[label][corruption][severity] = bootstrap_auroc_ci(
                     clean_e[label],
-                    _jepa_energy(model, cor_imgs, args.K, device),
+                    _jepa_energy_batched(model, cor_imgs, args.K, device, batch_size=_cs),
                     n_boot=args.n_boot,
                 )
 
             corr_results["pixel_std"][corruption][severity] = bootstrap_auroc_ci(
                 clean_e["pixel_std"],
-                pixel_stats_energy(cor_imgs.to(device)).cpu(),
+                pixel_stats_energy(cor_imgs),
                 n_boot=args.n_boot,
             )
             corr_results["random_init"][corruption][severity] = bootstrap_auroc_ci(
                 clean_e["random_init"],
-                _jepa_energy(rand_model, cor_imgs, args.K, device),
+                _jepa_energy_batched(rand_model, cor_imgs, args.K, device, batch_size=_cs),
                 n_boot=args.n_boot,
             )
             corr_results["mahal_tgt"][corruption][severity] = bootstrap_auroc_ci(
                 clean_e["mahal_tgt"],
-                _mahal_target_batched(cor_imgs, ref_model, mu_maha_tgt, prec_maha_tgt, device),
+                _mahal_target_batched(cor_imgs, ref_model, mu_maha_tgt, prec_maha_tgt, device, batch_size=_cs),
                 n_boot=args.n_boot,
             )
             corr_results["mahal_ctx"][corruption][severity] = bootstrap_auroc_ci(
                 clean_e["mahal_ctx"],
-                mahalanobis_energy(cor_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device),
+                _mahal_energy_batched(cor_imgs, ref_model, mu_maha_ctx, prec_maha_ctx, device, batch_size=_cs),
                 n_boot=args.n_boot,
             )
             corr_results["mae_untrained"][corruption][severity] = bootstrap_auroc_ci(
@@ -593,6 +596,27 @@ def main() -> None:
             ref_pt = corr_results.get("ref_s0", {}).get(corruption, {}).get(severity, {}).get("point", float("nan"))
             print(f"  [{ci+1}/{len(corruptions)}] {corruption:<25} sev={severity}  "
                   f"{time.time()-t0:.1f}s  ref_s0={ref_pt:.3f}")
+
+            # Crash insurance: record completed cell to progress log (test split only, write-only)
+            if args.split == "test":
+                import json as _pjson
+                _cell_log = {
+                    "corruption": corruption, "severity": severity,
+                    "ref_s0_auroc": corr_results.get("ref_s0", {}).get(corruption, {}).get(severity, {}).get("point"),
+                    "all_heads": {
+                        lbl: corr_results[lbl][corruption][severity].get("point")
+                        for lbl in all_labels
+                        if lbl in corr_results and corruption in corr_results[lbl] and severity in corr_results[lbl][corruption]
+                    },
+                    "wall_s": round(time.time() - t0, 1),
+                }
+                with open("reports/terminal_test_progress.jsonl", "a") as _pf:
+                    _pf.write(_pjson.dumps(_cell_log) + "\n")
+
+            # Memory cleanup: release corrupted batch and flush MPS allocator between cells
+            del cor_imgs
+            if device == "mps":
+                torch.mps.empty_cache()
 
     stage2_wall = time.time() - stage2_t0
     print(f"  Stage 2 wall: {stage2_wall:.1f}s")
