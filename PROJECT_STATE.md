@@ -12,11 +12,11 @@
 ## Current phase / step
 
 **Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6p COMPLETE** — R3 run-1 aborted (MPS OOM). Memory fix applied (chunked eval, del+empty_cache). Parity gate PASS. Throughput rehearsal GO (cell=217s ≤ 400s, projected 4.9h). R3 run-2: GO — launch from DECISIONS.md runsheet.
+**Step 1.6q/r COMPLETE** — R3 run-2 canonical. ref_s1 MPS infra void repaired. Decision 1=A PASS. Probe-on-test done (band check FAIL noted). Scratch v2 evidence: gaps +2.8/+0.4/+1.0pp at n=40/200/400; −6.5pp at n=4000; only n=40 exceeds combined spread. Gate decision = human. Binding claim filled (CIFAR-10=0.864 added). phase1.md drafted. Next: human review of phase1.md; Phase 2 kickoff.
 
-**Tonight's command:** `bash scripts/tonight.sh` → prints pointer to DECISIONS.md runsheet. Launch R3 run-2 from there per ritual.
+**Tonight's command:** `bash scripts/tonight.sh`
 
-**Today's tasks: see Next actions table.**
+**Today's tasks: see Step 1.6q section below.**
 
 ---
 
@@ -35,7 +35,8 @@ Never describe status from memory — only from this table.
 | Reference seed 2 | `configs/phase1_ref.yaml` | DONE, Gate 1A passed | `gommvdgc` — eff_rank 173.2, loss 0.2072, pred_loss 0.2045, spread 19.54, var 0.995. best.ckpt=ep145. **Canonical: epoch_0150.ckpt**. Probe n=4000 mean 0.582 (probe seeds {0,1,2}: 0.582/0.579/0.584, σ=0.0025) |
 | Hardmask seed 0  | `configs/phase1_hardmask.yaml` | DONE, Gate 1A passed. **Adoption REJECTED** (probe 0.587 < 0.62) | `fw1out6d` — eff_rank 189.2, loss 0.2933, pred_loss 0.2918 (ep150). best.ckpt is epoch 2 (checkpoint-saving bug). **Canonical: epoch_0150.ckpt**. Probe n=4000 0.587 (statistically indistinguishable from reference spread 0.564–0.601) |
 | MAE baseline     | `configs/mae_baseline.yaml` | **DONE** | `eoofx7fk` (deep-music-14) — final loss 0.4630, epoch 149 (0-indexed). **Canonical: epoch_0150.ckpt** (150 % 10 == 0 ✓). best.ckpt valid (MAE loss monotone). W&B: https://wandb.ai/entropy_chess/jepa-vision/runs/eoofx7fk |
-| **R3 run-1** | terminal_benchmark.py (all 5 ckpts, test split) | **ABORTED — DO-NOT-USE** | Launched overnight Jul 12→13. Aborted at ~9/75 Stage-2 cells: kIOGPUCommandBufferCallbackErrorOutOfMemory at shot_noise sev2. Stage-1 clean means completed cleanly (all 10 heads). 9 observed Stage-2 cells (gaussian sev1-5: 0.747/0.687/0.722/0.879/0.964; shot sev1-4: 0.973/0.755/0.995/0.928 — non-monotone, post-OOM corruption suspected). Interruption exception invoked (ritual step 5). **NUMBERS NOT USED IN ANY REPORT.** |
+| **R3 run-1** | terminal_benchmark.py (all 5 ckpts, test split) | **ABORTED — DO-NOT-USE** | Launched overnight Jul 12→13. Aborted at ~9/75 Stage-2 cells: kIOGPUCommandBufferCallbackErrorOutOfMemory at shot_noise sev2. Stage-1 clean means completed cleanly (all 10 heads). 9 observed Stage-2 cells (gaussian sev1-5: 0.747/0.687/0.722/0.879/0.964; shot sev1-4: 0.973/0.755/0.995/0.928 — non-monotone, post-OOM corruption suspected). Interruption exception invoked (ritual step 5). **NUMBERS NOT USED IN ANY REPORT.** Item-5 diagnostic (1.6q): gaussian sev1 Δ=0.168 vs run-2 confirms non-monotone run-1. **VOID IN ENTIRETY.** |
+| **R3 run-2** | terminal_benchmark.py (all 5 ckpts, test split) | **DONE — CANONICAL** | Launched 2026-07-16, exit 0, ~4.5h (Stage1=2265s, Stage2=12972s, Stage3=636s, Stage4=185s). 75/75 Stage-2 cells complete (crash-insurance JSONL). ref_s1 Stage-2 VOID-INFRA (MPS silent Stage-1 corruption; recomputed 1.6q). ref_s0 Stage-2 canonical (2 clean seeds). mahal_tgt D3 confirmed: SVHN=0.986, CIFAR=0.864. Stage-4b (test probe) run separately (scripts/probe_on_test.py). Report: reports/terminal_test.md. |
 
 **Checkpoint-saving bug note:** For the hardmask run, pred_loss is NOT monotonically decreasing — it starts low (EMA target close to context encoder early in training) and rises as EMA momentum grows from 0.996→1.0. The checkpoint saver saved epoch 2 as "best" because it had the lowest pred_loss (0.2738). The correct fully-trained checkpoint is epoch_0150.ckpt (pred_loss 0.2918). The adoption verdict used epoch_0150.ckpt. This bug does not affect reference runs (their loss is monotonically decreasing). Must fix checkpoint saving for future runs that use increasing-difficulty schedules.
 
@@ -348,6 +349,117 @@ Gap (JEPA-ref−A3)         +0.0373*      +0.0366*      +0.0466*      +0.0039*
 ```
 
 Gap wiring confirmed working. Scratch 4/4 cells loaded. Gaps positive at all n. B2 note printed correctly.
+
+---
+
+## Step 1.6q — R3 run-2 canonical + ref_s1 infra void + probe-on-test (2026-07-16)
+
+**Item 1: R3 run-2 recorded (canonical).**
+- R3 run-2: exit 0, ~4.5h, 75/75 Stage-2 cells. Report: reports/terminal_test.md.
+- Item-5 diagnostic: gaussian sev1 Δ=0.168 between run-1 and run-2 → run-1 VOID IN ENTIRETY. Run-2 canonical.
+- Wall: Stage1=2265s, Stage2=12972s, Stage3=636s, Stage4=185s.
+
+**Item 2: MPS silent Stage-1 corruption — ref_s1 (lbd900za) incident.**
+- Symptom: ref_s1 clean test mean 0.2711 (expected ~0.219); Stage-2 AUROCs all 0.07–0.19.
+- Root cause: MPS async dispatch — `.cpu()` returned before MPS GPU computation completed. Large K=8 batch caused race condition; returned tensor had stale/partial data.
+- Fix: `torch.mps.synchronize()` before `.cpu()` in `_jepa_energy` (terminal_benchmark.py).
+- Run-1 hardmask also corrupted (clean mean 0.3865 vs ~0.2901 expected) → run-1 VOID confirmed by two sources.
+- `random_init` seeded-fixed (torch.manual_seed(0)); drift Δ=0.0054 = MPS non-determinism, not corruption.
+- `mae_untrained` fresh-per-run (no seed); drift Δ=0.040 = different random weights. Not a bug.
+
+**Item 3: Decision 1=A — ref_s1 recompute (PASS).**
+- Script: `scripts/recompute_ref_s1.py` (MPS sync fix applied).
+- Validation (binding): recomputed clean mean = **0.2190** ∈ [0.216, 0.222] → **PASS**.
+- ref_s1 Stage-3 OOD (recomputed): SVHN=0.1277 [0.1235, 0.1319]; CIFAR-10=0.5048 [0.4968, 0.5132].
+- ref_s1 Stage-2 rows: **VOID-INFRA** (not rerun; would require another 4.5h benchmark run).
+- Files updated: reports/energy_dumps/clean_ref_s1_test.npy; reports/energy_dumps/ood_auroc_test.json.
+
+**Item 4: Decision 2=YES — probe-on-test (Stage 4b).**
+- Script: `scripts/probe_on_test.py`. Parity check PASS (test==val at 4-decimal precision when test_loader=val_loader).
+- Stage 4b test results (3 seeds, z-score fitted on val, LR selected on val):
+
+| Model       | n=40          | n=200         | n=400         | n=4000        |
+|-------------|---------------|---------------|---------------|---------------|
+| ref_s0      | 0.2786±0.0111 | 0.3830±0.0084 | 0.4293±0.0095 | 0.5592±0.0020 |
+| ref_s1†     | 0.2600±0.0228 | 0.3528±0.0174 | 0.3983±0.0050 | 0.5419±0.0027 |
+| ref_s2      | 0.2677±0.0291 | 0.3710±0.0180 | 0.4110±0.0088 | 0.5396±0.0056 |
+| hardmask_s0*| 0.2845±0.0136 | 0.4051±0.0045 | 0.4473±0.0051 | 0.5657±0.0018 |
+
+JEPA ref mean (test) n=4000: **0.547** (vs val-era 0.583).
+
+**Band check (binding):** n=4000 within ±0.03 of val-era {0.603, 0.564, 0.580}:
+- ref_s0: |Δ|=0.044 → FAIL (val=0.603, test=0.559)
+- ref_s1: |Δ|=0.022 → PASS
+- ref_s2: |Δ|=0.041 → FAIL (val=0.580, test=0.540)
+- Band check result: **FAIL** (2/3 exceed ±0.03). Direction expected (probe LR selected on val n=1000; test n=8000 gives lower accuracy). No recompute triggered; numbers reported as-is.
+
+**Item 5: Report repairs to reports/terminal_test.md.**
+- Header fixed: "Val Split" → "Test Split"; metadata line: `split=val` → `split=test`.
+- ref_s1 Stage-2 rows marked †VOID-INFRA.
+- ref_s1 Stage-3 OOD row updated to recomputed values.
+- Stage 4 header updated with val-era note.
+- Stage 4b section added (test probe grid + band check + per-seed detail).
+- Wall-clock updated (added Stage 1 row, Stage 4b row).
+
+**15-type win/loss vs pixel_std (ref_s0, test split, Stage-2 mean over severities):**
+
+| Type | ref_s0 | pixel_std | Win? |
+|------|--------|-----------|------|
+| gaussian_noise | 0.736 | 0.734 | ✓ (+0.002) |
+| shot_noise | 0.760 | 0.766 | ✗ (−0.006) |
+| impulse_noise | 0.796 | 0.741 | ✓ (+0.055) |
+| defocus_blur | 0.209 | 0.299 | ✗ (inverted) |
+| glass_blur | 0.269 | 0.343 | ✗ (inverted) |
+| motion_blur | 0.262 | 0.339 | ✗ (inverted) |
+| zoom_blur | 0.360 | 0.371 | ✗ (−0.011) |
+| snow | 0.357 | 0.486 | ✗ (−0.129) |
+| frost | 0.249 | 0.234 | ✓ (+0.015) — borderline |
+| fog | 0.078 | 0.072 | ✓ (+0.006) — both inverted |
+| brightness | 0.532 | 0.443 | ✓ (+0.089) |
+| contrast | 0.019 | 0.009 | ✓ (+0.010) — both inverted |
+| elastic_transform | 0.439 | 0.476 | ✗ (−0.037) |
+| pixelate | 0.443 | 0.441 | ✓ (+0.002) — borderline |
+| jpeg_compression | 0.566 | 0.484 | ✓ (+0.082) |
+
+Win count (test): **8/15** (gaussian, impulse, frost, fog, brightness, contrast, pixelate, jpeg). Clear wins (margin >>0.009): impulse, brightness, jpeg. Borderline (margin ≤0.015): gaussian, frost, fog, contrast, pixelate. Losses on blur family (4) + shot + zoom + snow + elastic.
+
+**Binding claim (filled from test report):**
+"Latent prediction error detects corruption in 8/15 types at test (vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (mahal_tgt SVHN=0.986 at test, probe-pool fit, no additional training). Energy alone inverts on semantic OOD — prediction-difficulty mechanism, Spearman rho=0.770 (val+SVHN). Two readouts, one encoder."
+
+**mahal_tgt complementarity note:** mahal_tgt detects energy-inverted types well — defocus=0.937, contrast=0.977, fog=0.920 — confirming the two readouts are complementary on exactly the types where energy fails.
+
+**Scratch v2 results (recipe-fixed: batch=128, RandomResizedCrop+HFlip), 3 seeds × 36 runs, 3.94h:**
+
+| Cell | val_acc | best_lr |
+|------|---------|---------|
+| s0_n40 | 0.2430 | 1e-03 |
+| s0_n200 | 0.3800 | 1e-04 |
+| s0_n400 | 0.4140 | 1e-03 |
+| s0_n4000 | 0.6350 | 3e-04 |
+| s1_n40 | 0.2570 | 3e-04 |
+| s1_n200 | 0.3910 | 3e-04 |
+| s1_n400 | 0.4320 | 1e-03 |
+| s1_n4000 | 0.6580 | 1e-03 |
+| s2_n40 | 0.2460 | 1e-03 |
+| s2_n200 | 0.3860 | 3e-04 |
+| s2_n400 | 0.4320 | 3e-04 |
+| s2_n4000 | 0.6510 | 1e-03 |
+
+Cross-seed means ± σ: n=40 0.2487±0.0074, n=200 0.3857±0.0055, n=400 0.4260±0.0104, n=4000 0.6480±0.0118.
+
+**Binding Gap (JEPA val − scratch v2):**
+
+| n | JEPA ref mean | Scratch v2 mean | Gap | Gate |
+|---|---|---|---|---|
+| 40 | 0.277 | 0.249 | +0.028 | ✓ |
+| 200 | 0.390 | 0.386 | +0.004 | ✓ |
+| 400 | 0.436 | 0.426 | +0.010 | ✓ |
+| 4000 | 0.583 | 0.648 | −0.065 | (outside criterion) |
+
+~~Gate 1B(iii): PASS~~ — STRUCK (1.6r). Replacement: Gate 1B(iii) evidence: point gaps positive at n=40/200/400 (+2.8/+0.4/+1.0pp); n=4000 −6.5pp to recipe-fixed scratch. Only n=40 exceeds combined spread (RSS=0.016 vs gap=0.028); n=200/400 within noise. Gate decision = human.
+
+**Binding claim (verbatim from DECISIONS.md, slots filled):**
+"Latent prediction error detects corruption in 8/15 types at test (vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (mahal_tgt SVHN=0.986, CIFAR-10=0.864 at test, probe-pool fit, no additional training). Energy alone inverts on semantic OOD — prediction-difficulty mechanism, Spearman rho=0.770 (pooled val+SVHN). Two readouts, one encoder."
 
 ---
 

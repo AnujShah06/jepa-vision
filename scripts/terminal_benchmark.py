@@ -118,7 +118,10 @@ def _corrupt_tensor(imgs: torch.Tensor, corruption: str, severity: int) -> torch
 def _jepa_energy(model: VisionJEPA, imgs: torch.Tensor, K: int, device: str) -> torch.Tensor:
     """K-sample latent prediction energy. Returns [B] on CPU."""
     model.eval()
-    return image_energy(model, imgs.to(device), K=K, seed=0, device=device)["energy"].cpu()
+    result = image_energy(model, imgs.to(device), K=K, seed=0, device=device)["energy"]
+    if device == "mps":
+        torch.mps.synchronize()   # MPS async-unsafe: force completion before CPU copy
+    return result.cpu()
 
 
 @torch.no_grad()
@@ -293,7 +296,15 @@ def _run_probe_grid(
     n_list: list[int],
     device: str,
     probe_seed: int = 0,
-) -> dict[int, float]:
+    test_loader: DataLoader | None = None,
+) -> tuple[dict[int, float], dict[int, float]]:
+    """Returns (val_results, test_results).  test_results is {} when test_loader is None.
+
+    z-score is always fitted on val features (locked protocol).
+    When test_loader is provided, the best-val head is evaluated on test features
+    z-scored with the same val mean/std.  Parity invariant: when test_loader==val_loader,
+    test_results[n] == val_results[n] exactly (same head, same data).
+    """
     import torchvision.transforms as T
     from torchvision.datasets import STL10
 
@@ -311,7 +322,14 @@ def _run_probe_grid(
     std = val_f.std(0, keepdim=True).clamp(min=1e-6)
     val_fz = (val_f - mu) / std
 
+    test_fz: torch.Tensor | None = None
+    test_l_tensor: torch.Tensor | None = None
+    if test_loader is not None:
+        test_f, test_l_tensor = _target_mean_features(model, test_loader, device)
+        test_fz = (test_f - mu) / std   # z-score with val mean/std — locked protocol
+
     results: dict[int, float] = {}
+    test_results: dict[int, float] = {}
     for n in n_list:
         n_per_class = n // 10
         idx        = stratified_sample(probe_labels, n_per_class=n_per_class, seed=probe_seed)
@@ -322,13 +340,21 @@ def _run_probe_grid(
         tr_fz      = (tr_f - mu) / std
 
         best_acc = 0.0
+        best_head = None
         for lr in (3e-3, 1e-3, 3e-4):
-            _, acc = train_probe(tr_fz, tr_l, val_fz, val_l, lr=lr, epochs=200, device=device)
+            head, acc = train_probe(tr_fz, tr_l, val_fz, val_l, lr=lr, epochs=200, device=device)
             if acc > best_acc:
                 best_acc = acc
+                best_head = head
         results[n] = best_acc
 
-    return results
+        if test_loader is not None and best_head is not None:
+            best_head_dev = best_head.to(device)
+            with torch.no_grad():
+                pred = best_head_dev(test_fz.to(device)).argmax(1)
+                test_results[n] = round((pred == test_l_tensor.to(device)).float().mean().item(), 4)
+
+    return results, test_results
 
 
 # ---------------------------------------------------------------------------
@@ -754,16 +780,42 @@ def main() -> None:
     # label → n → [acc_seed0, acc_seed1, acc_seed2]
     probe_results: dict[str, dict[int, list[float]]] = {}
 
+    # When split=test (Decision 2): pass eval_loader for test-eval probe.
+    # Parity invariant: test_results == val_results when test_loader==val_loader.
+    _probe_test_loader = eval_loader if args.split == "test" else None
+
+    # Parity check (runs first probe_seed only; verifies code path, not numeric repro)
+    if _probe_test_loader is not None:
+        print("  [parity check] probe_seed=0, ref_s0, test_loader=val_loader ...")
+        _pr_chk, _te_chk = _run_probe_grid(
+            ref_model, val_loader, n_list, device, probe_seed=0,
+            test_loader=val_loader,  # intentionally pass val for parity
+        )
+        _par_fails = [n for n in n_list if abs(_pr_chk[n] - _te_chk[n]) > 1e-8]
+        if _par_fails:
+            print(f"  [parity check] FAIL at n={_par_fails} — STOP")
+            sys.exit("Probe parity check FAILED: test_result != val_result when eval=val")
+        print(f"  [parity check] PASS: test==val for all n (diff=0 at n={n_list})")
+
+    probe_results: dict[str, dict[int, list[float]]] = {}
+    probe_test_results: dict[str, dict[int, list[float]]] = {}
+
     for label, model in jepa_models.items():
         probe_results[label] = {n: [] for n in n_list}
+        probe_test_results[label] = {n: [] for n in n_list}
         for ps in probe_seeds:
             print(f"  {label} probe_seed={ps} ...", end=" ", flush=True)
             t0 = time.time()
-            seed_r = _run_probe_grid(model, val_loader, n_list, device, probe_seed=ps)
+            seed_r, test_r = _run_probe_grid(
+                model, val_loader, n_list, device, probe_seed=ps,
+                test_loader=_probe_test_loader,
+            )
             print(f"{time.time()-t0:.1f}s  " +
                   "  ".join(f"n={n}={seed_r[n]:.4f}" for n in n_list))
             for n in n_list:
                 probe_results[label][n].append(seed_r[n])
+                if test_r:
+                    probe_test_results[label][n].append(test_r[n])
 
     stage4_wall = time.time() - stage4_t0
     print(f"  Stage 4 wall: {stage4_wall:.1f}s")
@@ -779,10 +831,11 @@ def main() -> None:
         valid = [v for v in vals if v == v]
         return sum(valid) / len(valid) if valid else float("nan")
 
+    _split_label = args.split.capitalize()
     lines: list[str] = [
-        "# Terminal Benchmark — Val Split" + (" (Dry Run)" if args.dry_run else ""),
+        f"# Terminal Benchmark — {_split_label} Split" + (" (Dry Run)" if args.dry_run else ""),
         "",
-        f"split=val  dry_run={args.dry_run}  K={args.K}  n_boot={args.n_boot}",
+        f"split={args.split}  dry_run={args.dry_run}  K={args.K}  n_boot={args.n_boot}",
         f"corruptions: {corruptions}",
         f"severities:  {severities}",
         "",
@@ -885,9 +938,19 @@ def main() -> None:
                 accs.append(sum(vals) / len(vals))
         return sum(accs) / len(accs) if accs else None
 
+    _has_test_probe = bool(probe_test_results and any(
+        probe_test_results[lbl].get(n) for lbl in probe_test_results for n in n_list
+    ))
+    _probe_header = (
+        "## Stage 4 — Probe Grid [VAL SELECTION, VAL EVAL — locked protocol]\n\n"
+        "*(val-era Stage-4; z-score fitted on val; LR selected on val; eval=val — "
+        "pre-Decision-2 numbers; see Stage 4b for test eval)*"
+        if _has_test_probe else
+        "## Stage 4 — Probe Grid (locked: target mean+zscore, lr-sweep, 200ep, 3 probe seeds)"
+    )
     lines += [
         "",
-        "## Stage 4 — Probe Grid (locked: target mean+zscore, lr-sweep, 200ep, 3 probe seeds)",
+        _probe_header,
         "",
         f"{'Model':<20}  {'n=40':>12}  {'n=200':>12}  {'n=400':>12}  {'n=4000':>13}",
         "-" * 75,
@@ -900,7 +963,7 @@ def main() -> None:
             f"{_ms(pr.get(4000,[])):>13}"
         )
 
-    # Scratch gap rows
+    # Scratch gap rows (Stage 4 val side)
     if _ref_labels:
         def _gap_str(n: int) -> str:
             ref = _ref_mean_n(n)
@@ -934,6 +997,41 @@ def main() -> None:
                 f"{pr.get(n, [float('nan')]*(i+1))[i]:>6.4f}" for n in n_list
             )
             lines.append(row)
+
+    # Stage 4b: probe-on-test (Decision 2, only populated when split=test)
+    if _has_test_probe:
+        lines += [
+            "",
+            "## Stage 4b — Probe Grid [TEST EVAL] (Decision 2 / PD2)",
+            "",
+            "*(z-score fitted on val; LR selected on val; eval=**test**; 3 probe seeds)*",
+            "",
+            f"{'Model':<20}  {'n=40':>12}  {'n=200':>12}  {'n=400':>12}  {'n=4000':>13}",
+            "-" * 75,
+        ]
+        for lbl, tr in probe_test_results.items():
+            if any(tr.get(n) for n in n_list):
+                lines.append(
+                    f"{lbl:<20}  {_ms(tr.get(40,  [])):>12}  "
+                    f"{_ms(tr.get(200, [])):>12}  "
+                    f"{_ms(tr.get(400, [])):>12}  "
+                    f"{_ms(tr.get(4000,[])):>13}"
+                )
+        lines += [
+            "",
+            "### Stage 4b detail — per probe seed",
+            "",
+            f"{'Model/seed':<26}  {'n=40':>6}  {'n=200':>6}  {'n=400':>6}  {'n=4000':>7}",
+            "-" * 60,
+        ]
+        for lbl, tr in probe_test_results.items():
+            if any(tr.get(n) for n in n_list):
+                for i, ps in enumerate(probe_seeds):
+                    row = f"{lbl+' s='+str(ps):<26}  "
+                    row += "  ".join(
+                        f"{tr.get(n, [float('nan')]*(i+1))[i]:>6.4f}" for n in n_list
+                    )
+                    lines.append(row)
 
     total_wall = stage2_wall + stage3_wall + stage4_wall
     lines += [

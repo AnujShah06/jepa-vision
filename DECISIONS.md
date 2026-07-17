@@ -151,8 +151,8 @@ gaussian_noise, shot_noise, impulse_noise, defocus_blur, glass_blur, motion_blur
 **hardmask_s0\*** row: labeled "single-seed, REJECTED (R1)" in every table.
 
 **Binding claim language (two-readout branch, D3 SVHN=0.985 ≥ 0.9 fires this):**
-"Latent prediction error detects corruption in most types (N/15 at test, vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (Mahal-on-target-features SVHN AUROC=D3_test, probe-pool fit, no additional training). Energy alone inverts on semantic OOD — prediction-difficulty mechanism, Spearman rho=0.770 (val+SVHN). Two readouts, one encoder."
-[Fill N and D3_test from test report; no post-hoc reframing permitted.]
+"Latent prediction error detects corruption in 8/15 types at test (vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (mahal_tgt SVHN=0.986, CIFAR-10=0.864 at test, probe-pool fit, no additional training). Energy alone inverts on semantic OOD — prediction-difficulty mechanism, Spearman rho=0.770 (pooled val+SVHN). Two readouts, one encoder."
+[Slots filled from terminal_test.md R3 run-2: N=8, SVHN=0.986, CIFAR-10=0.864. No post-hoc reframing.]
 
 **Wall-clock projection (8k test vs 1k val):**
 Stage 2: ~2626s × 8 = ~21,000s. Stage 3: ~580s. Stage 4: ~400s. Stage 1: ~120s.
@@ -236,6 +236,46 @@ Root cause: Stage-2 evaluation loop sent full 8k tensor (884 MB) to MPS per mode
 Infra fix (throughput-only, eval logic FROZEN): chunked GPU evaluation (chunk=1000), explicit `del + torch.mps.empty_cache()` after each cell, pixel_std moved to CPU-only.
 
 Rule: infra fixes require val parity gate (energy max|Δ|≤1e-4, AUROC identical to 3 decimals) and zero eval-logic change before relaunching. Parity gate is a hard block; failure = STOP.
+
+[1.6q] **R3 run-1 VOID IN ENTIRETY — Item-5 diagnostic (2026-07-16)**
+
+Pre-registered diagnostic on run-2 completion: compare run-2 gaussian cells against run-1 pre-OOM values.
+Result: gaussian sev1 Δ=0.168 (run-1=0.747, run-2=0.579). Exceeds expected ±0.05 noise band.
+Interpretation: run-1 Stage-1 clean energies were also corrupted by the same MPS async dispatch issue (ref_s1 clean mean 0.3865 vs run-2's clean 0.2901 after sync fix). Non-monotone gaussian values were not solely post-OOM corruption — the entire run-1 was computing against stale clean baselines. **Run-1 VOID IN ENTIRETY** (not just Stage-2).
+
+[1.6q] **MPS silent Stage-1 corruption — ref_s1 (lbd900za) in R3 run-2 (2026-07-16)**
+
+Symptom: ref_s1 (lbd900za) clean test mean 0.2711 on test set (expected ~0.219 from independent run-1 measurement). All Stage-2 ref_s1 AUROCs near zero (0.07–0.19).
+
+Root cause: MPS async dispatch race condition. `.cpu()` called on result of `image_energy()` returned before MPS GPU computation completed. For large K=8 × 8000-image batches, the returned CPU tensor contained stale or partial data.
+
+Fix applied: `torch.mps.synchronize()` before `.cpu()` in `_jepa_energy` (terminal_benchmark.py). Verified: recomputed clean mean = 0.2190 (Decision 1=A validation PASS, within [0.216, 0.222]).
+
+Consequence: ref_s1 Stage-2 rows VOID-INFRA. ref_s1 Stage-3 OOD recomputed (SVHN=0.1277, CIFAR-10=0.5048). ref_s0 Stage-2 is canonical (unaffected; corruption comparison loop uses clean_e[label] which was fetched before Stage-2 loop — only the clean energy tensor for the specific run had the race; ref_s0 clean mean 0.2169 was normal and agreed with prior val measurements).
+
+Rule for future runs: always add `torch.mps.synchronize()` before any `.cpu()` call that follows MPS computation in evaluation scripts. If clean mean drifts >0.005 from prior measurements, treat as corrupted and STOP.
+
+[1.6q] **Gate 1B(iii) evidence — scratch v2 (recipe-fixed) result (2026-07-17)**
+
+Scratch v2 (batch=128, RandomResizedCrop+HFlip) — 36 runs, 3 seeds × 4 n × 3 lr, 3.94h:
+- n=40: scratch mean 0.2487 ± 0.0074
+- n=200: scratch mean 0.3857 ± 0.0055
+- n=400: scratch mean 0.4260 ± 0.0104
+- n=4000: scratch mean 0.6480 ± 0.0118
+
+Binding gaps (JEPA val − scratch v2):
+- n=40: +0.028
+- n=200: +0.004
+- n=400: +0.010
+- n=4000: −0.065
+
+~~**Gate 1B(iii): PASS**~~ — STRUCK. Replacement per 1.6r gate-language correction:
+
+**Gate 1B(iii) evidence:** point gaps positive in all three low-label cells (+2.8/+0.4/+1.0pp) and −6.5pp at n=4000 to recipe-fixed scratch. Combined seed spreads (RSS of JEPA training-seed σ and scratch-v2 training-seed σ): n=40: σ_J=0.014, σ_S=0.007, RSS=0.016; n=200: σ_J=0.025, σ_S=0.006, RSS=0.026; n=400: σ_J=0.019, σ_S=0.010, RSS=0.022; n=4000: σ_J=0.018, σ_S=0.012, RSS=0.022. Only n=40 gap (+0.028) exceeds combined spread (0.016); n=200/400 gaps (+0.004/+0.010) within noise. **Gate decision = human, with spreads in view.**
+
+PD5 check: s0_n4000=0.635 vs 1.5d target 0.636±0.02 → WITHIN BAND. Recipe fix reproduces 1.5d result; A3 underfit confirmed.
+
+**Strawman guard arc (named paragraph for phase1.md):** A3 scratch (no aug, large batch) produced a +0.3pp gap at n=4000 that appeared to support the low-label claim. Pre-registered rule B2 disqualified A3 before R3: result favorable, recipe not matched, must rerun. Scratch v2 (batch=128, aug) confirms the A3 favorable number was an artifact of recipe underfit — at n=4000 the recipe-fixed baseline wins by 6.5pp. The reported gap evidence uses v2. A3 numbers appear in the report with explicit underfit label and are not used in any claim.
 
 [1.6i] **Approvals ledger**
 
