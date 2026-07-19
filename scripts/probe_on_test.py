@@ -13,10 +13,12 @@ Band check (binding): ref_s0/s1/s2 n=4000 test acc within ±0.03 of val numbers
   {0.600, 0.565, 0.579} (from terminal_test.md Stage 4 val-era numbers).
 
 Usage:
-  uv run python scripts/probe_on_test.py
+  uv run python scripts/probe_on_test.py            # test eval (Stage 4b)
+  uv run python scripts/probe_on_test.py --parity   # val eval, 48-cell diff vs Stage-4 reference
 """
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -134,9 +136,40 @@ def _run_probe_grid(
     return results, test_results
 
 
+# Per-seed Stage-4 val reference (from terminal_val_s4gap.md, commit 68a2b30)
+VAL_S4_REF: dict[str, dict[int, dict[int, float]]] = {
+    "ref_s0": {
+        0: {40: 0.2970, 200: 0.4350, 400: 0.4480, 4000: 0.6030},
+        1: {40: 0.2890, 200: 0.3800, 400: 0.4650, 4000: 0.6020},
+        2: {40: 0.2950, 200: 0.4290, 400: 0.4520, 4000: 0.6040},
+    },
+    "ref_s1": {
+        0: {40: 0.2730, 200: 0.3720, 400: 0.4010, 4000: 0.5660},
+        1: {40: 0.2630, 200: 0.3490, 400: 0.4210, 4000: 0.5620},
+        2: {40: 0.2710, 200: 0.3750, 400: 0.4290, 4000: 0.5650},
+    },
+    "ref_s2": {
+        0: {40: 0.2900, 200: 0.3920, 400: 0.4210, 4000: 0.5800},
+        1: {40: 0.2450, 200: 0.3690, 400: 0.4470, 4000: 0.5810},
+        2: {40: 0.2700, 200: 0.4080, 400: 0.4390, 4000: 0.5800},
+    },
+    "hardmask_s0*": {
+        0: {40: 0.2980, 200: 0.4370, 400: 0.4660, 4000: 0.5890},
+        1: {40: 0.2930, 200: 0.4030, 400: 0.4770, 4000: 0.5910},
+        2: {40: 0.2940, 200: 0.4140, 400: 0.5010, 4000: 0.5890},
+    },
+}
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--parity", action="store_true",
+                        help="Run eval=val, compare 48 cells against stored Stage-4 reference")
+    args = parser.parse_args()
+
     device = _pick_device()
-    print(f"[probe_on_test] device={device}  probe_seeds={PROBE_SEEDS}  n_list={N_LIST}\n")
+    mode_str = "PARITY (eval=val)" if args.parity else "Stage 4b (eval=test)"
+    print(f"[probe_on_test] mode={mode_str}  device={device}  probe_seeds={PROBE_SEEDS}  n_list={N_LIST}\n")
 
     val_loader  = get_val_loader(DATA_DIR, batch_size=256, num_workers=0)
     test_loader = get_test_loader(DATA_DIR, batch_size=256, num_workers=0)
@@ -161,6 +194,10 @@ def main() -> None:
     if fails:
         sys.exit(f"Parity check FAILED at n={fails}: val={_pr_chk}  test={_te_chk}")
     print(f"  PASS — test==val for all n (diff=0)  val={_pr_chk}")
+
+    if args.parity:
+        _run_full_parity(models, val_loader, device)
+        return
 
     # ── Stage 4b: probe-on-test, 3 seeds ─────────────────────────────────────
     print("\n[Stage 4b] probe-on-test (3 seeds) ...")
@@ -234,6 +271,73 @@ def main() -> None:
     else:
         print("BAND CHECK: FAIL — paste both columns, investigate before updating report")
     print("=" * 72)
+
+
+def _run_full_parity(
+    models: dict, val_loader: DataLoader, device: str
+) -> None:
+    """Run all 4 models × 3 seeds on val and compare 48 cells against VAL_S4_REF."""
+    import statistics
+
+    print("\n[full parity] eval=val, all models × seeds × n  (rounding convention: round(.,4))")
+    print("Reference source: terminal_val_s4gap.md Stage-4 per-seed table\n")
+
+    # per_seed_val[model][seed][n] = float
+    per_seed_val: dict[str, dict[int, dict[int, float]]] = {}
+    for label, model in models.items():
+        per_seed_val[label] = {}
+        t0 = time.time()
+        print(f"  running {label}:")
+        for ps in PROBE_SEEDS:
+            vr, _ = _run_probe_grid(
+                model, val_loader, N_LIST, device, probe_seed=ps,
+                test_loader=None,
+            )
+            per_seed_val[label][ps] = {n: vr[n] for n in N_LIST}
+            print(f"    seed={ps}  val={[round(vr[n], 4) for n in N_LIST]}")
+        print(f"  {label} wall: {time.time()-t0:.1f}s")
+
+    # 48-cell diff table
+    print("\n" + "=" * 88)
+    print("PARITY CHECK — 48-cell diff: this run (eval=val) vs stored Stage-4 reference")
+    print("Convention: PASS = round(actual, 4) == round(stored, 4)  (uniform 4-dp rounding)")
+    print()
+    hdr = f"{'Model':<18} {'seed':>4}  {'n':>5}  {'actual':>8}  {'stored':>8}  {'diff':>8}  result"
+    print(hdr)
+    print("-" * 88)
+
+    n_pass = n_fail = 0
+    mismatch_cells: list[str] = []
+
+    for label in models:
+        if label not in VAL_S4_REF:
+            print(f"  {label}: no reference — skip")
+            continue
+        for ps in PROBE_SEEDS:
+            for n in N_LIST:
+                actual  = per_seed_val[label][ps][n]
+                stored  = VAL_S4_REF[label][ps][n]
+                diff    = actual - stored
+                verdict = "PASS" if round(actual, 4) == round(stored, 4) else "FAIL"
+                if verdict == "PASS":
+                    n_pass += 1
+                else:
+                    n_fail += 1
+                    mismatch_cells.append(
+                        f"  MISMATCH: {label} seed={ps} n={n}  actual={round(actual,4):.4f}  stored={stored:.4f}  diff={diff:+.4f}"
+                    )
+                print(f"{label:<18} {ps:>4}  {n:>5}  {round(actual,4):>8.4f}  {stored:>8.4f}  {diff:>+8.4f}  {verdict}")
+
+    print("=" * 88)
+    print(f"\nSummary: {n_pass}/48 PASS  {n_fail}/48 FAIL")
+    if n_fail == 0:
+        print("\nPARITY CHECK: PASS — all 48 cells match stored Stage-4 reference at round(.,4)")
+        print("→ test probe grid is CANONICAL; Stage-4b test numbers are promoted.")
+    else:
+        print("\nPARITY CHECK: FAIL — mismatching cells:")
+        for m in mismatch_cells:
+            print(m)
+        print("→ test grid stays PROVISIONAL; phase1.md transfer section blocked until resolved.")
 
 
 if __name__ == "__main__":
