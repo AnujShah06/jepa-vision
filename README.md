@@ -31,7 +31,7 @@ Self-supervised anomaly detection with I-JEPA on STL-10. A ViT-Tiny (~3M trainab
 | Linear probe n=40 vs scratch | Gap (val) | +2.8pp (> combined seed spread) |
 | Linear probe n=4000 vs scratch | Gap (val) | −6.5pp (scratch wins) |
 
-*mahal_tgt: Mahalanobis on ref_s0 frozen target-encoder features, fit on 4k probe pool, no labels, no additional training. Bootstrap 95% CIs over 8k test images.*
+*mahal_tgt: Mahalanobis on ref_s0 frozen target-encoder features, fit on 4k probe pool, no labels, no additional training. Bootstrap 95% CIs over 8k test images. (corruption reference row: two seeds — see report §8)*
 
 Full tables, per-severity CIs, probe grids, and gate rulings: [reports/phase1.md](reports/phase1.md).
 

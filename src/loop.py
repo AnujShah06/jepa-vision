@@ -162,11 +162,12 @@ def train(
     val_loader: DataLoader | None = None,
 ) -> tuple[Path, Path]:
     """
-    Train VisionJEPA.  Returns (best_ckpt_path, last_periodic_ckpt_path).
+    Train VisionJEPA.  Returns the canonical (final-epoch) checkpoint path.
 
-    Checkpoints are saved to run_dir/ every cfg.ckpt_every epochs and
-    uploaded as W&B artifacts (if run is not None).  Collapse diagnostics
-    are logged every cfg.diag_every epochs from training-batch embeddings.
+    best.ckpt is NOT produced — pred_loss is not monotone for EMA-warmup runs
+    (see DECISIONS.md [2.0] checkpoint saver fix / fw1out6d evidence).
+    Checkpoints are saved every cfg.ckpt_every epochs; the final epoch is
+    always saved explicitly if it falls off the periodic boundary.
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -197,8 +198,6 @@ def train(
 
     # -- bookkeeping -------------------------------------------------------
     step = start_step
-    best_pred_loss = float("inf")
-    best_path = run_dir / "best.ckpt"
     prev_periodic: Path | None = None
 
     wandb_run_id = run.id if run is not None else None
@@ -268,15 +267,6 @@ def train(
             flush=True,
         )
 
-        # -- best checkpoint (by pred_loss, no val set for pretraining) ---
-        if avgs["pred_loss"] < best_pred_loss:
-            best_pred_loss = avgs["pred_loss"]
-            save_checkpoint(
-                best_path, model, optimizer, scheduler,
-                epoch=epoch, step=step,
-                extra={"pred_loss": best_pred_loss, "wandb_run_id": wandb_run_id},
-            )
-
         # -- periodic checkpoint ------------------------------------------
         if (epoch + 1) % cfg.ckpt_every == 0:
             new_periodic = run_dir / f"epoch_{epoch+1:04d}.ckpt"
@@ -303,5 +293,19 @@ def train(
                 prev_periodic.unlink()
             prev_periodic = new_periodic
 
-    last_path = prev_periodic or best_path
-    return best_path, last_path
+        # -- final-epoch canonical (fires when epochs % ckpt_every != 0) --
+        if epoch == cfg.epochs - 1 and (epoch + 1) % cfg.ckpt_every != 0:
+            canon_path = run_dir / f"epoch_{epoch+1:04d}.ckpt"
+            save_checkpoint(
+                canon_path, model, optimizer, scheduler,
+                epoch=epoch, step=step,
+                extra={"pred_loss": avgs["pred_loss"], "wandb_run_id": wandb_run_id},
+            )
+            if prev_periodic is not None and prev_periodic.exists():
+                prev_periodic.unlink()
+            prev_periodic = canon_path
+
+    assert prev_periodic is not None, (
+        "no checkpoint saved — check cfg.epochs and cfg.ckpt_every"
+    )
+    return prev_periodic

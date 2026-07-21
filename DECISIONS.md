@@ -363,3 +363,32 @@ Phase 1 training config specifies `use_amp: true` and loop.py calls `torch.autoc
 [1.6w] **phase1.md FINAL — dual sign-off on record (2026-07-18)**
 
 Reviewer sign-off granted (external reviewer, Jul 17) after corrections C1–C9 applied (1.6u) and claim approved (1.6v). Human FINAL approval: Anuj, 2026-07-17. phase1.md footer updated from FINAL-PENDING-SIGNOFF to FINAL. No further edits to phase1.md permitted without both approvals being re-opened. Canonical export: reports/review_export/phase1.md.
+
+---
+
+[2.0] **Phase-2 pre-made decisions — persisted pre-launch (PD10/PD11 + reviewer, 2026-07-21)**
+
+**(a) Warm-start checkpoint:** `runs/tkqjawa0/epoch_0150.ckpt` — canonical Phase-1 production checkpoint (seed 0, 150 epochs, eff_rank 175.3). Used as initialisation for encoder B (warm-start experiment). No other Phase-1 checkpoint is eligible.
+
+**(b) Masking:** reference config (`configs/phase1_ref.yaml` block masking: target scale 0.15–0.20, context scale 0.85–1.00). Hardmask was R1-rejected and is not revisited without new pre-registered evidence showing a transfer benefit on aerial data.
+
+**(c) Resolution:** 96×96, patch_size=8 → 144 tokens. Unchanged from Phase 1 for harness continuity and the Phase-3 deployability story (edge inference budget). Revisit only with documented evidence that a different resolution materially improves OOD AUROC on the val quarantine holdout.
+
+**(d) Checkpoint saver fix — LANDS NOW, pre-registered (2026-07-21):** `best.ckpt` saving REMOVED ENTIRELY from `src/loop.py`. Rationale: `fw1out6d` evidence — EMA warmup causes pred_loss to be lowest at epoch 2, so the saver incorrectly labeled that as "best"; the canonical checkpoint was always `epoch_0150.ckpt`. Policy going forward: every-10-epoch periodic saves + final-epoch canonical (explicit save if `epochs % ckpt_every != 0`). Unit test added: `tests/test_no_best_ckpt.py` asserts no `best.ckpt` is produced after a 2-epoch run. train.py updated to unpack single return value.
+
+[2.0] **Phase-2 split freeze — RESISC45 + AID (design committed before data in view, 2026-07-21)**
+
+Dataset: NWPU-RESISC45 (31,500 images, 45 classes × 700 images, 256×256).
+
+**Quarantine (unseen-anomaly holdout):** 5 classes held out entirely from train/val/test of normal classes. Used only as OOD anomaly examples at Phase-2 terminal evaluation. Classes: `airplane`, `storage_tank`, `harbor`, `thermal_power_station`, `ship`. Quarantine list committed as `data/splits/resisc45_quarantine.json`.
+
+**Normal-class splits:** remaining 40 classes (40 × 700 = 28,000 images); stratified 80/10/10, seed=0.
+- train: 40 × 560 = 22,400 images (pretraining + probe pool)
+- val: 40 × 70 = 2,800 images (committed; used for gate and probe selection)
+- test: 40 × 70 = 2,800 images (**SEALED at creation; opens once at Phase-2 terminal session**)
+
+Split index files committed: `data/splits/resisc45_train_idx.json`, `resisc45_val_idx.json`, `resisc45_test_idx.json` (lists of relative file paths). No split choice is made with data in view — this design entry precedes any download.
+
+**AID:** ~10,000 images, 30 classes, joins the unlabeled pretraining pool only. No AID class appears in any evaluation split. AID images are never labeled for probe or anomaly tasks.
+
+**Single-open test discipline:** `resisc45_test_idx.json` is sealed at creation. Terminal benchmark reads it once (Phase-2 session 2.4+). No evaluation script reads the test split before that session. Gate and probe selection use val only.

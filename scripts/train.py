@@ -243,7 +243,7 @@ def main() -> None:
 
     # -- train -------------------------------------------------------------
     train_cfg = _build_train_cfg(cfg)
-    best_path, last_path = train(
+    last_path = train(
         model=model,
         train_loader=loader,
         cfg=train_cfg,
@@ -256,7 +256,7 @@ def main() -> None:
         scheduler_state=scheduler_state,
     )
 
-    print(f"\n[train] done.  best={best_path}  last={last_path}")
+    print(f"\n[train] done.  canonical={last_path}")
     if run is not None:
         run.finish()
 
