@@ -376,6 +376,28 @@ Reviewer sign-off granted (external reviewer, Jul 17) after corrections C1–C9 
 
 **(d) Checkpoint saver fix — LANDS NOW, pre-registered (2026-07-21):** `best.ckpt` saving REMOVED ENTIRELY from `src/loop.py`. Rationale: `fw1out6d` evidence — EMA warmup causes pred_loss to be lowest at epoch 2, so the saver incorrectly labeled that as "best"; the canonical checkpoint was always `epoch_0150.ckpt`. Policy going forward: every-10-epoch periodic saves + final-epoch canonical (explicit save if `epochs % ckpt_every != 0`). Unit test added: `tests/test_no_best_ckpt.py` asserts no `best.ckpt` is produced after a 2-epoch run. train.py updated to unpack single return value.
 
+[2.0] **AID ruling — deferred, pre-registered pool-enlargement (2026-07-21)**
+
+Phase-2 primary claims run on RESISC45 alone (train pool = 22,400). AID (~10k images, 30 classes) is a deferred, pre-registered pool-enlargement comparison contingent on manual download. Trigger: if/when AID is downloaded and extracted to data/aid/, a new encoder is trained on RESISC45+AID pool and compared to the RESISC45-only encoder on the SAME pre-registered val metrics (quarantine AUROC + 40-class probe). No eval split ever contains AID images. AID is not a blocker for Phase-2 primary claims. Status: NOT DOWNLOADED (manual download from http://www.lmars.whu.edu.cn/prof_web/zhongyanfei/e-code.html required).
+
+[2.1] **Pre-registered readings for 2.2/2.3 — committed BEFORE encoder A launches (2026-07-21)**
+
+**Encoder A:** scratch-on-aerial, `configs/phase2_scratch.yaml`, 150 epochs, seed 0.
+**Encoder B:** warm-start from `runs/tkqjawa0/epoch_0150.ckpt`, identical config/budget, seed 0.
+
+**Gate 1A (per Phase-1 convention):** eff_rank ≥ 89% of d=192 = 171/192, spread and variance healthy, no collapse. Applies to both A and B.
+
+**Comparison metric (primary, binding):** unseen-class energy AUROC — quarantine 5 classes as anomalies vs 40 normal val classes as in-distribution. Measured on VAL split only. Uses `image_energy` (K=8, ref_s0 collator settings) from the trained target encoder.
+
+**Comparison metric (secondary):** locked-protocol linear probe on 40-class val (target encoder, mean-pool, z-score, lr-sweep {3e-3,1e-3,3e-4}, 200ep, 3 probe seeds, n=4000).
+
+**Pre-registered decision rules (binding, fire after 2.3):**
+- B_AUROC > A_AUROC + 0.03 → warm-start transfers; B becomes production candidate; report advantage explicitly.
+- |B_AUROC − A_AUROC| ≤ 0.03 → equivalent; A is production (cleaner story: no cross-domain pretraining dependency).
+- A_AUROC > B_AUROC + 0.03 → negative transfer; report honestly; A is production.
+
+**Multi-seed rule (standing protocol):** ≥3 seeds required before any resume/report claim. The 2.2/2.3 launches are seed 0 only. Seeds 1 and 2 launch after Gate 1A confirms the recipe works (session 2.4 or later).
+
 [2.0] **Phase-2 split freeze — RESISC45 + AID (design committed before data in view, 2026-07-21)**
 
 Dataset: NWPU-RESISC45 (31,500 images, 45 classes × 700 images, 256×256).
@@ -392,3 +414,17 @@ Split index files committed: `data/splits/resisc45_train_idx.json`, `resisc45_va
 **AID:** ~10,000 images, 30 classes, joins the unlabeled pretraining pool only. No AID class appears in any evaluation split. AID images are never labeled for probe or anomaly tasks.
 
 **Single-open test discipline:** `resisc45_test_idx.json` is sealed at creation. Terminal benchmark reads it once (Phase-2 session 2.4+). No evaluation script reads the test split before that session. Gate and probe selection use val only.
+
+[2.2] **Gate 1A correction — no numeric rank bar (2026-07-21)**
+
+The [2.1] entry "eff_rank ≥ 89% of d=192 = 171/192" is **STRUCK**. Gate 1A is a health-signature gate with no numeric threshold. Correct reading: eff_rank well off the collapse floor, mean-variance ~0.99, spread stable across training, no NaNs, loss curve sane (monotone-ish descent). The Phase-1 observations (eff_rank 172.6–175.3 across seeds) are empirical context for what "well off floor" looks like on this architecture — not a pass/fail criterion. Gate decision = human in all cases.
+
+[2.2] **Warm-start verification — CLEAN (2026-07-21)**
+
+`runs/tkqjawa0/epoch_0150.ckpt` loads into the Phase-2 VisionJEPA model (img_size=96, patch_size=8, d=192, 6 enc layers, 3 pred layers) with strict=True: 192/192 keys, 0 missing, 0 unexpected. Architecture compatibility confirmed. Checkpoint top-level key is `model_state` (not `model`). Encoder B warm-start is unblocked.
+
+Launch mechanism: `--warm-start` flag (added to `scripts/train.py` 2026-07-21) loads model weights only; optimizer, scheduler, and epoch counter reset to zero. Distinct from `--resume` (which continues from checkpoint epoch with full optimizer state).
+
+[2.2] **MIT LICENSE — approved and written (2026-07-21)**
+
+MIT License, © 2026 Anuj Shah. Approved by Anuj (Jul 18). Written to `LICENSE`.

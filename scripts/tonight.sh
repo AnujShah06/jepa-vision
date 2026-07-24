@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# tonight.sh — 2.0. Gate-0 smoke (2.1) required before any encoder launch.
-# Run Gate-0 first; if PASS, encoder A launches tonight. If FAIL, stop.
+# tonight.sh — 2.2. Encoder B (warm-start) launch.
 #
-# 2.1 Gate-0 smoke (dataloader + collapse diagnostics on RESISC45, d=64, 2 epochs):
-# uv run python scripts/smoke_aerial.py   # (script TBD in session 2.1)
+# Pre-condition: Human has reviewed encoder A Gate 1A evidence and approved.
+# Gate 1A is a health-signature gate — no numeric bar. Criteria:
+#   - eff_rank well off collapse floor
+#   - mean-variance ~0.99
+#   - spread stable across training
+#   - no NaNs
+#   - sane (monotone-ish) loss curve
 #
-# If Gate-0 PASS → encoder A (scratch) launch:
-# caffeinate -is uv run python scripts/train.py \
-#   --config configs/phase2_ref.yaml --seed 0
+# Warm-start: loads model weights from runs/tkqjawa0/epoch_0150.ckpt (Phase-1
+# seed-0 canonical, 192/192 keys clean). Optimizer/scheduler/epoch reset to 0.
+# Same 150-epoch budget and config as encoder A (phase2_warmstart.yaml).
 #
-# NOTHING TONIGHT until 2.1 Gate-0 passes. Run 2.1 first.
-echo "2.0 complete. Run 2.1 Gate-0 smoke before any encoder launch."
-echo "If Gate-0 PASS, launch encoder A with the command above."
-exit 0
+# DO NOT launch until human has confirmed encoder A Gate 1A.
+# (If encoder A was never run, launch encoder A first via:
+#   caffeinate -is uv run python scripts/train.py --config configs/phase2_scratch.yaml --seed 0)
+
+caffeinate -is uv run python scripts/train.py \
+  --config configs/phase2_warmstart.yaml \
+  --warm-start runs/tkqjawa0/epoch_0150.ckpt \
+  --seed 0

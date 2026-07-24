@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.checkpoint import load_checkpoint
 from src.data.stl10 import get_pretrain_loader, get_smoke_loader
+from src.data.resisc45 import get_resisc45_pretrain_loader
 from src.loop import TrainConfig, train
 from src.models.jepa import VisionJEPA, VisionJEPAConfig
 
@@ -100,8 +101,8 @@ def _build_mask_kwargs(cfg: dict) -> dict:
 def _build_loader(cfg: dict, seed: int | None):
     d = cfg["data"]
     data_dir = Path(__file__).parent.parent / "data"
+    dataset = d.get("dataset", "stl10")  # "stl10" or "resisc45"
     n_images = d.get("n_images")
-    augment = d.get("augment", True)
     batch_size = d.get("batch_size", 256)
     num_workers = d.get("num_workers", 4)
     loader_seed = seed if seed is not None else d.get("seed")
@@ -112,6 +113,15 @@ def _build_loader(cfg: dict, seed: int | None):
     mask_kwargs = _build_mask_kwargs(cfg)
     if mask_kwargs:
         print(f"[train] masking override: {mask_kwargs}")
+
+    if dataset == "resisc45":
+        return get_resisc45_pretrain_loader(
+            batch_size=batch_size,
+            num_workers=num_workers,
+            seed=loader_seed,
+            drop_last=True,
+            mask_kwargs=mask_kwargs,
+        )
 
     if n_images is not None:
         # small subset -- use smoke loader (no augmentation regardless of flag)
@@ -160,6 +170,9 @@ def main() -> None:
                         help="Random seed (overrides config data.seed)")
     parser.add_argument("--resume", default=None,
                         help="Path to checkpoint to resume from")
+    parser.add_argument("--warm-start", default=None,
+                        help="Path to checkpoint to warm-start from "
+                             "(loads model weights only; fresh optimizer/scheduler/epoch)")
     parser.add_argument("--no-wandb", action="store_true",
                         help="Disable W&B logging (dry run)")
     args = parser.parse_args()
@@ -204,6 +217,10 @@ def main() -> None:
         resume_wandb_id = ckpt["extra"].get("wandb_run_id")
         print(f"[train] resuming from epoch {start_epoch}, step {start_step}"
               + (f", W&B run {resume_wandb_id}" if resume_wandb_id else ""))
+    elif args.warm_start:
+        print(f"[train] warm-start from: {args.warm_start}")
+        load_checkpoint(args.warm_start, model=model)   # loads model weights; ignores opt/sched
+        print("[train] warm-start: model weights loaded; optimizer/scheduler/epoch reset to 0")
 
     # -- W&B ---------------------------------------------------------------
     run = None

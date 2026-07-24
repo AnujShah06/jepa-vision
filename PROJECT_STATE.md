@@ -16,10 +16,13 @@ phase1.md FINAL — reviewer corrections C1–C9 + claim approved + human sign-o
 
 **Phase 2 — I-JEPA on Aerial Imagery (RESISC45 + AID)**
 **Step 2.0 COMPLETE** — Split freeze committed (4 JSON files). Checkpoint saver fix in loop.py. Pre-made decisions persisted to DECISIONS.md. Session plan persisted below.
+**Step 2.1 COMPLETE** — RESISC45 dataloader verified. Gate-0 smoke: eff_rank=41.4/64, loss monotone, no NaN. PASS. Encoder A launched.
 
-**Current step: 2.1** — dataloader + Gate-0 smoke on aerial. Run 2.1 before launching any encoder training.
+**Current step: 2.2** — Encoder A Gate 1A (human decision); Encoder B warm-start prep; state consolidation.
 
-**Tonight's command:** `bash scripts/tonight.sh`
+**⚠ F1 FLAG — ENCODER A NOT FOUND:** No Phase-2 run directory exists in `runs/` as of 2026-07-21. Newest directory is `scratch_v2` (Jul 17, Phase-1 scratch comparator). Encoder A either was never launched or crashed before W&B created a run directory. **Human must provide W&B run ID or explain.** Gate 1A cannot be filed without evidence.
+
+**Tonight's command:** `bash scripts/tonight.sh` (encoder B warm-start — executes AFTER human confirms Gate 1A on encoder A)
 
 ---
 
@@ -28,7 +31,7 @@ phase1.md FINAL — reviewer corrections C1–C9 + claim approved + human sign-o
 | Session | Goal | Gate | Launch |
 |---|---|---|---|
 | **2.1** | RESISC45 dataloader; AID dataloader (once downloaded); Gate-0 smoke: 2-epoch d=64 run confirms collapse diagnostics work on aerial data | Gate-0: eff_rank stays > 0 (not collapsed), no import errors, no MPS OOM | After 2.1 Gate-0 PASS |
-| **2.2** | Encoder A: scratch on aerial, reference config (configs/phase1_ref.yaml adapted for RESISC45); 150 epochs overnight | Gate 1A: eff_rank ≥ 172/192 at epoch 150 | After 2.1 |
+| **2.2** | Encoder A: scratch on aerial, reference config (configs/phase1_ref.yaml adapted for RESISC45); 150 epochs overnight | Gate 1A: health-signature (rank well off floor, mean-var ~0.99, spread stable, no NaN, sane loss curve) — no numeric bar | After 2.1 |
 | **2.3** | Encoder B: warm-start from tkqjawa0/epoch_0150.ckpt; same 150 epochs; comparison pre-registered in DECISIONS.md BEFORE 2.2 launches (primary = unseen-class AUROC on val quarantine; secondary = probe on 40-class val) | Gate 1A + warm/scratch AUROC comparison | After 2.2 Gate 1A |
 | **2.4+** | Per PLAYBOOK §2: corruption rerun (config-only); DINOv2 ViT-S external baseline (expect to lose, report); heatmap gallery (~20 images, figure not metric); terminal evaluation (sealed test split opens ONCE) | Pre-registered per PLAYBOOK §2 | After all prior gates |
 
@@ -56,8 +59,8 @@ AID (Aerial Image Dataset, Wuhan University, 30 classes, ~10k images) is not aut
 
 | Run | Config | Status | W&B / notes |
 |---|---|---|---|
-| Encoder A (scratch) | configs/phase2_ref.yaml (TBD — 2.1) | NOT STARTED | — |
-| Encoder B (warm-start) | configs/phase2_warmstart.yaml (TBD — 2.3) | NOT STARTED | — |
+| Encoder A (scratch) | configs/phase2_scratch.yaml | **⚠ NOT FOUND** | No run directory in `runs/` as of 2026-07-21. F1 flagged. Human must provide W&B ID or relaunch. Gate 1A PENDING human evidence. |
+| Encoder B (warm-start) | configs/phase2_warmstart.yaml | NOT STARTED | Warm-start from `runs/tkqjawa0/epoch_0150.ckpt`. Load verified: 192/192 keys clean. Launch AFTER human Gate 1A on encoder A. |
 
 ---
 

@@ -151,8 +151,8 @@ gaussian_noise, shot_noise, impulse_noise, defocus_blur, glass_blur, motion_blur
 **hardmask_s0\*** row: labeled "single-seed, REJECTED (R1)" in every table.
 
 **Binding claim language (two-readout branch, D3 SVHN=0.985 ≥ 0.9 fires this):**
-"Latent prediction error detects corruption in 8/15 types at test (vs pixel-std baseline). The same frozen encoder's feature density detects semantic domain shift (mahal_tgt SVHN=0.986, CIFAR-10=0.864 at test, probe-pool fit, no additional training). Energy alone inverts on semantic OOD — prediction-difficulty mechanism, Spearman rho=0.770 (pooled val+SVHN). Two readouts, one encoder."
-[Slots filled from terminal_test.md R3 run-2: N=8, SVHN=0.986, CIFAR-10=0.864. No post-hoc reframing.]
+"Latent prediction error detects complexity-adding corruption (noise-family AUROC 0.74–0.80 at test, ≥0.92 at maximum severity) and inverts on complexity-reducing corruption; it exceeds the pixel-variance baseline on 8/15 types (3 clearly). The same frozen encoder's feature density detects semantic domain shift (mahal_tgt SVHN 0.986, CIFAR-10 0.864 at test, probe-pool fit, no additional training) and is strongest on precisely the energy-inverted types. Inversion mechanism: prediction difficulty, Spearman ρ=0.770 (pooled val+SVHN). Two readouts, one encoder."
+[Claim approved — Anuj, 2026-07-17. Slots filled from terminal_test.md R3 run-2. No post-hoc reframing.]
 
 **Wall-clock projection (8k test vs 1k val):**
 Stage 2: ~2626s × 8 = ~21,000s. Stage 3: ~580s. Stage 4: ~400s. Stage 1: ~120s.
@@ -347,3 +347,84 @@ Condition (a): **16/16 PASS.** Condition (b): signed-delta sum = +0.0020, mean =
 [1.6t] **Claim-language deviation log — "most types" → "8/15 types" (2026-07-17)**
 
 The filled binding claim replaced template language "most types (N/15" with "8/15 types" — a template edit beyond fill-slots. Rationale accepted post-hoc: at N=8/15, "most" (>7.5) is technically true but would overclaim under the clearly-above standard (only 3 types clearly above at >5pp margin); the numeral-only form is more precise and less flattering to the system. Deviation logged; sentence stands. Rule going forward: fills only; any template edit requires same-session log entry in DECISIONS.md.
+
+[1.6u] **F7 — fp32 on MPS; bfloat16 autocast is a no-op for most MPS ops (2026-07-18)**
+
+Phase 1 training config specifies `use_amp: true` and loop.py calls `torch.autocast(device_type='mps', dtype=torch.bfloat16)`. However, MPS falls back to fp32 for most operations — bfloat16 autocast on MPS does not reduce numerical precision the way CUDA bfloat16 does. Practical effect: training runs in fp32. DECISIONS.md entries at [1.3] and [1.6] that state "bfloat16 AMP" referred to the config intent, not the actual numerical precision. Methods section of phase1.md updated to "fp32 on MPS" per this ruling. Config `use_amp: true` retained as-is (the autocast call is harmless).
+
+[1.6u] **Methods-transcription rule — F2-class violation logged (2026-07-18)**
+
+§3 of phase1.md was initially composed partly from memory (patch 12×12/64 tokens claimed; correct value from code is 8×8 patch, 12×12 grid = 144 tokens). This is an F2 violation: methods sections must be transcribed from config files and model source, never from memory. Rule persisted: for any future methods section, read configs/*.yaml and grep model source before writing. This instance recorded; §3 corrected in 1.6u.
+
+[1.6u] **D2 — Two-axis conflation in §1 and §4.1 (2026-07-18)**
+
+§1 and §4.1 used a single "bucket" scheme that conflated Axis 1 (absolute AUROC vs chance) with Axis 2 (margin vs pixel_std baseline). Specific errors: (i) shot_noise (AUROC 0.760, above-chance) was listed under "below or inverted" because it is a point-loss to pixel_std (−0.6pp); (ii) fog (0.078), contrast (0.019), frost (0.249) were listed as "borderline wins" without noting that both ref_s0 and pixel_std are below-chance on these types — the positive margin is between two inverted scores. §1 and §4.1 revised to name Axis 1 and Axis 2 explicitly. §9 claim language revised in 1.6v with human-approved complexity framing (see binding claim entry above). Deviation D2 complete: **approver=Anuj, 2026-07-17**. Rationale: template conflated detection with baseline comparison; three of eight point-wins occur on inverted types.
+
+[1.6w] **phase1.md FINAL — dual sign-off on record (2026-07-18)**
+
+Reviewer sign-off granted (external reviewer, Jul 17) after corrections C1–C9 applied (1.6u) and claim approved (1.6v). Human FINAL approval: Anuj, 2026-07-17. phase1.md footer updated from FINAL-PENDING-SIGNOFF to FINAL. No further edits to phase1.md permitted without both approvals being re-opened. Canonical export: reports/review_export/phase1.md.
+
+---
+
+[2.0] **Phase-2 pre-made decisions — persisted pre-launch (PD10/PD11 + reviewer, 2026-07-21)**
+
+**(a) Warm-start checkpoint:** `runs/tkqjawa0/epoch_0150.ckpt` — canonical Phase-1 production checkpoint (seed 0, 150 epochs, eff_rank 175.3). Used as initialisation for encoder B (warm-start experiment). No other Phase-1 checkpoint is eligible.
+
+**(b) Masking:** reference config (`configs/phase1_ref.yaml` block masking: target scale 0.15–0.20, context scale 0.85–1.00). Hardmask was R1-rejected and is not revisited without new pre-registered evidence showing a transfer benefit on aerial data.
+
+**(c) Resolution:** 96×96, patch_size=8 → 144 tokens. Unchanged from Phase 1 for harness continuity and the Phase-3 deployability story (edge inference budget). Revisit only with documented evidence that a different resolution materially improves OOD AUROC on the val quarantine holdout.
+
+**(d) Checkpoint saver fix — LANDS NOW, pre-registered (2026-07-21):** `best.ckpt` saving REMOVED ENTIRELY from `src/loop.py`. Rationale: `fw1out6d` evidence — EMA warmup causes pred_loss to be lowest at epoch 2, so the saver incorrectly labeled that as "best"; the canonical checkpoint was always `epoch_0150.ckpt`. Policy going forward: every-10-epoch periodic saves + final-epoch canonical (explicit save if `epochs % ckpt_every != 0`). Unit test added: `tests/test_no_best_ckpt.py` asserts no `best.ckpt` is produced after a 2-epoch run. train.py updated to unpack single return value.
+
+[2.0] **AID ruling — deferred, pre-registered pool-enlargement (2026-07-21)**
+
+Phase-2 primary claims run on RESISC45 alone (train pool = 22,400). AID (~10k images, 30 classes) is a deferred, pre-registered pool-enlargement comparison contingent on manual download. Trigger: if/when AID is downloaded and extracted to data/aid/, a new encoder is trained on RESISC45+AID pool and compared to the RESISC45-only encoder on the SAME pre-registered val metrics (quarantine AUROC + 40-class probe). No eval split ever contains AID images. AID is not a blocker for Phase-2 primary claims. Status: NOT DOWNLOADED (manual download from http://www.lmars.whu.edu.cn/prof_web/zhongyanfei/e-code.html required).
+
+[2.1] **Pre-registered readings for 2.2/2.3 — committed BEFORE encoder A launches (2026-07-21)**
+
+**Encoder A:** scratch-on-aerial, `configs/phase2_scratch.yaml`, 150 epochs, seed 0.
+**Encoder B:** warm-start from `runs/tkqjawa0/epoch_0150.ckpt`, identical config/budget, seed 0.
+
+**Gate 1A (per Phase-1 convention):** eff_rank ≥ 89% of d=192 = 171/192, spread and variance healthy, no collapse. Applies to both A and B.
+
+**Comparison metric (primary, binding):** unseen-class energy AUROC — quarantine 5 classes as anomalies vs 40 normal val classes as in-distribution. Measured on VAL split only. Uses `image_energy` (K=8, ref_s0 collator settings) from the trained target encoder.
+
+**Comparison metric (secondary):** locked-protocol linear probe on 40-class val (target encoder, mean-pool, z-score, lr-sweep {3e-3,1e-3,3e-4}, 200ep, 3 probe seeds, n=4000).
+
+**Pre-registered decision rules (binding, fire after 2.3):**
+- B_AUROC > A_AUROC + 0.03 → warm-start transfers; B becomes production candidate; report advantage explicitly.
+- |B_AUROC − A_AUROC| ≤ 0.03 → equivalent; A is production (cleaner story: no cross-domain pretraining dependency).
+- A_AUROC > B_AUROC + 0.03 → negative transfer; report honestly; A is production.
+
+**Multi-seed rule (standing protocol):** ≥3 seeds required before any resume/report claim. The 2.2/2.3 launches are seed 0 only. Seeds 1 and 2 launch after Gate 1A confirms the recipe works (session 2.4 or later).
+
+[2.0] **Phase-2 split freeze — RESISC45 + AID (design committed before data in view, 2026-07-21)**
+
+Dataset: NWPU-RESISC45 (31,500 images, 45 classes × 700 images, 256×256).
+
+**Quarantine (unseen-anomaly holdout):** 5 classes held out entirely from train/val/test of normal classes. Used only as OOD anomaly examples at Phase-2 terminal evaluation. Classes: `airplane`, `storage_tank`, `harbor`, `thermal_power_station`, `ship`. Quarantine list committed as `data/splits/resisc45_quarantine.json`.
+
+**Normal-class splits:** remaining 40 classes (40 × 700 = 28,000 images); stratified 80/10/10, seed=0.
+- train: 40 × 560 = 22,400 images (pretraining + probe pool)
+- val: 40 × 70 = 2,800 images (committed; used for gate and probe selection)
+- test: 40 × 70 = 2,800 images (**SEALED at creation; opens once at Phase-2 terminal session**)
+
+Split index files committed: `data/splits/resisc45_train_idx.json`, `resisc45_val_idx.json`, `resisc45_test_idx.json` (lists of relative file paths). No split choice is made with data in view — this design entry precedes any download.
+
+**AID:** ~10,000 images, 30 classes, joins the unlabeled pretraining pool only. No AID class appears in any evaluation split. AID images are never labeled for probe or anomaly tasks.
+
+**Single-open test discipline:** `resisc45_test_idx.json` is sealed at creation. Terminal benchmark reads it once (Phase-2 session 2.4+). No evaluation script reads the test split before that session. Gate and probe selection use val only.
+
+[2.2] **Gate 1A correction — no numeric rank bar (2026-07-21)**
+
+The [2.1] entry "eff_rank ≥ 89% of d=192 = 171/192" is **STRUCK**. Gate 1A is a health-signature gate with no numeric threshold. Correct reading: eff_rank well off the collapse floor, mean-variance ~0.99, spread stable across training, no NaNs, loss curve sane (monotone-ish descent). The Phase-1 observations (eff_rank 172.6–175.3 across seeds) are empirical context for what "well off floor" looks like on this architecture — not a pass/fail criterion. Gate decision = human in all cases.
+
+[2.2] **Warm-start verification — CLEAN (2026-07-21)**
+
+`runs/tkqjawa0/epoch_0150.ckpt` loads into the Phase-2 VisionJEPA model (img_size=96, patch_size=8, d=192, 6 enc layers, 3 pred layers) with strict=True: 192/192 keys, 0 missing, 0 unexpected. Architecture compatibility confirmed. Checkpoint top-level key is `model_state` (not `model`). Encoder B warm-start is unblocked.
+
+Launch mechanism: `--warm-start` flag (added to `scripts/train.py` 2026-07-21) loads model weights only; optimizer, scheduler, and epoch counter reset to zero. Distinct from `--resume` (which continues from checkpoint epoch with full optimizer state).
+
+[2.2] **MIT LICENSE — approved and written (2026-07-21)**
+
+MIT License, © 2026 Anuj Shah. Approved by Anuj (Jul 18). Written to `LICENSE`.

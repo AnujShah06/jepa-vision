@@ -11,21 +11,56 @@
 
 ## Current phase / step
 
-**Phase 1 — I-JEPA-mini on STL-10**
-**Step 1.6t COMPLETE** — Mean-level parity PASS (16/16, signed-delta mean +0.000125). Exact-4dp struck as spec error. Gate rulings persisted (1B(i) NOT MET, 1B(iii) PASS, approver=Anuj 2026-07-15). Claim-deviation logged. phase1.md FROZEN FOR REVIEW. Export at reports/review_export/. Next: reviewer reads exported docs → consolidated correction list → apply → phase1.md FINAL.
+**Phase 1 — COMPLETE (FINAL 2026-07-17, dual sign-off on record)**
+phase1.md FINAL — reviewer corrections C1–C9 + claim approved + human sign-off. Export: reports/review_export/phase1.md.
 
-**Tonight's command:** `bash scripts/tonight.sh`  (nothing tonight)
+**Phase 2 — I-JEPA on Aerial Imagery (RESISC45 + AID)**
+**Step 2.0 COMPLETE** — Split freeze committed (4 JSON files). Checkpoint saver fix in loop.py. Pre-made decisions persisted to DECISIONS.md. Session plan persisted below.
+**Step 2.1 COMPLETE** — RESISC45 dataloader verified. Gate-0 smoke: eff_rank=41.4/64, loss monotone, no NaN. PASS. Encoder A launched.
+
+**Current step: 2.2** — Encoder A Gate 1A (human decision); Encoder B warm-start prep; state consolidation.
+
+**⚠ F1 FLAG — ENCODER A NOT FOUND:** No Phase-2 run directory exists in `runs/` as of 2026-07-21. Newest directory is `scratch_v2` (Jul 17, Phase-1 scratch comparator). Encoder A either was never launched or crashed before W&B created a run directory. **Human must provide W&B run ID or explain.** Gate 1A cannot be filed without evidence.
+
+**Tonight's command:** `bash scripts/tonight.sh` (encoder B warm-start — executes AFTER human confirms Gate 1A on encoder A)
 
 ---
 
-## Endgame queue (Phase 1 close-out)
+## Phase-2 session plan (pre-registered 2026-07-21)
 
-| Date | Action | Owner |
+| Session | Goal | Gate | Launch |
+|---|---|---|---|
+| **2.1** | RESISC45 dataloader; AID dataloader (once downloaded); Gate-0 smoke: 2-epoch d=64 run confirms collapse diagnostics work on aerial data | Gate-0: eff_rank stays > 0 (not collapsed), no import errors, no MPS OOM | After 2.1 Gate-0 PASS |
+| **2.2** | Encoder A: scratch on aerial, reference config (configs/phase1_ref.yaml adapted for RESISC45); 150 epochs overnight | Gate 1A: health-signature (rank well off floor, mean-var ~0.99, spread stable, no NaN, sane loss curve) — no numeric bar | After 2.1 |
+| **2.3** | Encoder B: warm-start from tkqjawa0/epoch_0150.ckpt; same 150 epochs; comparison pre-registered in DECISIONS.md BEFORE 2.2 launches (primary = unseen-class AUROC on val quarantine; secondary = probe on 40-class val) | Gate 1A + warm/scratch AUROC comparison | After 2.2 Gate 1A |
+| **2.4+** | Per PLAYBOOK §2: corruption rerun (config-only); DINOv2 ViT-S external baseline (expect to lose, report); heatmap gallery (~20 images, figure not metric); terminal evaluation (sealed test split opens ONCE) | Pre-registered per PLAYBOOK §2 | After all prior gates |
+
+**Pre-registered scratch vs warm-start comparison rule (DECISIONS.md [2.0], binding):**
+Primary metric: unseen-class AUROC on val quarantine holdout (5 quarantine classes as anomalies, 40 normal classes in val as in-distribution). Warm-start WINS if AUROC_warm > AUROC_scratch + 2·σ_combined. If within noise: report both, no winner declared. Comparison happens at session 2.3 after both encoders are trained.
+
+---
+
+## Phase-2 split status (2026-07-21)
+
+| File | Count | Status |
 |---|---|---|
-| 2026-07-16/17 | Reviewer reads reports/review_export/ whole; findings return as one consolidated correction list; apply corrections, human approves, phase1.md marked FINAL | Reviewer → Anuj → executor |
-| 2026-07-17 | README rewrite: leads with two-readout figure + binding claim sentence; quickstart incl. patch script + splits; evaluation-discipline subsection. Resume bullet from template with test numbers. Repo public/private decision (human's). | Anuj + executor |
-| 2026-07-18 | Phase 2 session 2.0: aerial split freeze in DECISIONS.md (5 quarantine classes, 40-class 80/10/10, committed as files) + checkpoint-saver fix, per PD10/PD11 | Executor |
-| 2026-07-19 | FINAL FABLE SESSION: HANDOFF_V2 regenerated with everything through that day; nothing else scheduled that evening | Executor |
+| data/splits/resisc45_train_idx.json | 22,400 | Committed — 40 classes × 560 |
+| data/splits/resisc45_val_idx.json | 2,800 | Committed — 40 classes × 70 |
+| data/splits/resisc45_test_idx.json | 2,800 | **SEALED** — opens Phase-2 terminal only |
+| data/splits/resisc45_quarantine.json | 3,500 | Committed — 5 classes × 700 (anomaly holdout) |
+| AID (unlabeled pool) | ~10,000 | **NOT YET DOWNLOADED** — manual download required (see below) |
+
+**AID download (human action required):**
+AID (Aerial Image Dataset, Wuhan University, 30 classes, ~10k images) is not auto-downloadable. Download from: http://www.lmars.whu.edu.cn/prof_web/zhongyanfei/e-code.html (or kaggle.com/datasets/jiayuzhang128/aid — verify checksum). Extract to `data/aid/`. AID is used for unlabeled pretraining pool only — no AID class enters any evaluation split.
+
+---
+
+## Phase-2 run ledger
+
+| Run | Config | Status | W&B / notes |
+|---|---|---|---|
+| Encoder A (scratch) | configs/phase2_scratch.yaml | **⚠ NOT FOUND** | No run directory in `runs/` as of 2026-07-21. F1 flagged. Human must provide W&B ID or relaunch. Gate 1A PENDING human evidence. |
+| Encoder B (warm-start) | configs/phase2_warmstart.yaml | NOT STARTED | Warm-start from `runs/tkqjawa0/epoch_0150.ckpt`. Load verified: 192/192 keys clean. Launch AFTER human Gate 1A on encoder A. |
 
 ---
 

@@ -1,0 +1,45 @@
+# phase2_scratch.yaml -- Phase 2 Encoder A: scratch on RESISC45
+# 40-class train pool (22,400 images), reference masking, 150 epochs.
+# Run: uv run python scripts/train.py --config configs/phase2_scratch.yaml --seed 0
+
+data:
+  dataset: resisc45         # routes to src/data/resisc45.py
+  batch_size: 256
+  num_workers: 4
+  seed: null                # overridden by --seed CLI arg
+
+model:
+  img_size: 96
+  patch_size: 8             # 12x12 = 144 tokens (unchanged from Phase 1)
+  d_model: 192
+  enc_layers: 6
+  enc_heads: 3
+  pred_layers: 3
+  pred_width: 96
+  pred_heads: 3
+  sigreg_weight: 1.0
+  sigreg_projections: 64
+  ema_decay: 0.996
+  use_ema: true
+  dropout: 0.0
+
+train:
+  epochs: 150
+  lr: 1.0e-3
+  weight_decay: 0.04
+  warmup_epochs: 10
+  grad_clip: 1.0
+  ckpt_every: 10
+  diag_every: 1
+  ema_start: 0.996
+  ema_end: 1.0
+  use_amp: true
+
+masking:
+  target_scale: [0.15, 0.20]
+  context_scale: [0.85, 1.00]
+
+wandb:
+  project: jepa-vision
+  entity: entropy_chess
+  tags: ["phase2-scratch", "encoder-A"]
